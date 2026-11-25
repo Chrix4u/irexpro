@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 'use strict';
+const {createPrivateOnce,readBoundedText}=require('./bounded-research-file.cjs');
 /**
  * Prospective broker-telemetry shadow, no broker/order/execution dependencies.
  * Only samples OPEN trades AFTER a frozen activation; a broker-net P&L crossing
@@ -104,12 +105,12 @@ function setup(root,owner,now=Date.now()) {
  if(!uuid.test(owner))throw Error('INVALID_OWNER');
  fs.mkdirSync(root,{recursive:true,mode:0o700});
  const dest=path.join(root,'activation.json');
- if(!fs.existsSync(dest))fs.writeFileSync(dest,JSON.stringify({
+ createPrivateOnce(dest,JSON.stringify({
   artifact:ARTIFACT,activatedAt:new Date(now).toISOString(),
   ownerFingerprint:hash(owner),brokerOrderAuthority:'NONE',
   researchOnly:true,changesExecution:false,automaticPromotion:false
- },null,2),{flag:'wx',mode:0o600});
- const marker=JSON.parse(fs.readFileSync(dest,'utf8'));
+ },null,2));
+ const marker=JSON.parse(readBoundedText(dest,1024*1024,'INVALID_ACTIVATION_FILE'));
  if(marker.artifact!==ARTIFACT||marker.ownerFingerprint!==hash(owner)||
    marker.brokerOrderAuthority!=='NONE'||!marker.researchOnly||
    ms(marker.activatedAt)==null||ms(marker.activatedAt)>now)

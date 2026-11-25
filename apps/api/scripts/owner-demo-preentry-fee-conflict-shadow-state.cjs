@@ -1,4 +1,5 @@
 'use strict';
+const {createPrivateOnce,readBoundedText}=require('./bounded-research-file.cjs');
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const shadow=require('./owner-demo-preentry-fee-conflict-shadow.cjs');
 const STATE_ARTIFACT='irexpro-owner-demo-entry-confluence-frozen-prospective-state-v1';
@@ -13,7 +14,7 @@ function setup(root,owner,conn,now=new Date()) {
   throw Error('INVALID_ENTRY_SHADOW_ACCOUNT_SCOPE');
  fs.mkdirSync(root,{recursive:true,mode:0o700});
  const p=path.join(root,MARKER_FILE);
- if(!fs.existsSync(p)) {
+ {
   const marker={
    artifact:shadow.ARTIFACT,activatedAt:new Date(now).toISOString(),
    ownerHash:sha(owner),brokerConnectionHash:sha(conn),
@@ -24,10 +25,9 @@ function setup(root,owner,conn,now=new Date()) {
    cannotVetoEntries:true,cannotChangeLot:true,cannotExit:true,
    cannotChangeProfitProtection:true,cannotPromoteToLive:true,
   };
-  try{fs.writeFileSync(p,JSON.stringify(marker,null,2)+'\n',{mode:0o600,flag:'wx'});}
-  catch(e){if(e.code!=='EEXIST')throw e;}
+  createPrivateOnce(p,JSON.stringify(marker,null,2)+'\n');
  }
- const a=JSON.parse(fs.readFileSync(p,'utf8'));
+ const a=JSON.parse(readBoundedText(p,1024*1024,'INVALID_ACTIVATION_FILE'));
  if(a.artifact!==shadow.ARTIFACT||a.ownerHash!==sha(owner)||
   a.brokerConnectionHash!==sha(conn)||a.broker!=='pepperstone-ctrader'||
   a.accountType!=='DEMO'||a.accountCurrency!=='USD'||
@@ -47,7 +47,7 @@ function load(root,marker){
   ownerHash:marker.ownerHash,brokerConnectionHash:marker.brokerConnectionHash,
   observations:{},noBrokerOrders:true,noRetrospectiveEntryScoring:true,
  };
- const s=JSON.parse(fs.readFileSync(p,'utf8'));
+ const s=JSON.parse(readBoundedText(p,1024*1024,'INVALID_ACTIVATION_FILE'));
  if(s.artifact!==STATE_ARTIFACT||
   s.activatedAt!==marker.activatedAt||s.ownerHash!==marker.ownerHash||
   s.brokerConnectionHash!==marker.brokerConnectionHash||

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 'use strict';
+const {createPrivateOnce,readBoundedText}=require('./bounded-research-file.cjs');
 /**
  * Owner-only Pepperstone USD DEMO prospective recovery-pressure observer.
  * READ ONLY against DB. Immutable OPEN-only entry and as-of quote snapshots.
@@ -81,15 +82,15 @@ function setup(root,owner,connection,now=Date.now()){
  if(!UUID.test(owner)||!UUID.test(connection))throw Error('MISSING_EXACT_DEMO_SCOPE');
  fs.mkdirSync(root,{recursive:true,mode:0o700});
  const file=path.join(root,'activation.json');
- if(!fs.existsSync(file)){
+ {
   const marker={artifact:model.ARTIFACT,activatedAt:new Date(now).toISOString(),
    ownerHash:sha(owner),brokerConnectionHash:sha(connection),
    accountType:'DEMO',accountCurrency:'USD',broker:'pepperstone-ctrader',
    readOnly:true,noBrokerOrders:true,changesExecution:false,
    canAutoPromote:false};
-  fs.writeFileSync(file,JSON.stringify(marker,null,2),{flag:'wx',mode:0o600});
+  createPrivateOnce(file,JSON.stringify(marker,null,2));
  }
- const marker=JSON.parse(fs.readFileSync(file,'utf8'));
+ const marker=JSON.parse(readBoundedText(file,1024*1024,'INVALID_ACTIVATION_FILE'));
  if(marker.artifact!==model.ARTIFACT||marker.ownerHash!==sha(owner)||
   marker.brokerConnectionHash!==sha(connection)||marker.changesExecution!==false||
   marker.canAutoPromote!==false||marker.readOnly!==true||
@@ -106,7 +107,7 @@ function setup(root,owner,connection,now=Date.now()){
 function setupEarlyCaution(root,owner,conn,now=Date.now()){
  if(!UUID.test(owner)||!UUID.test(conn))throw Error('EARLY_CAUTION_SCOPE_REQUIRED');
  const file=path.join(root,'early-profit-caution-activation.json');
- if(!fs.existsSync(file))fs.writeFileSync(file,JSON.stringify({
+ createPrivateOnce(file,JSON.stringify({
   artifact:model.EARLY_CAUTION_ARTIFACT,
   activatedAt:new Date(now).toISOString(),
   ownerHash:sha(owner),brokerConnectionHash:sha(conn),
@@ -116,8 +117,8 @@ function setupEarlyCaution(root,owner,conn,now=Date.now()){
   m1AlignedRMax:-.055,m3AlignedRMin:-.11,
   quoteNetPositiveRequired:true,readOnly:true,canAutoClose:false,
   noRetrospectiveScoring:true,canAutoPromote:false,
- },null,2),{flag:'wx',mode:0o600});
- const rule=JSON.parse(fs.readFileSync(file,'utf8'));
+ },null,2));
+ const rule=JSON.parse(readBoundedText(file,1024*1024,'INVALID_ACTIVATION_FILE'));
  if(rule.artifact!==model.EARLY_CAUTION_ARTIFACT||rule.ownerHash!==sha(owner)||
   rule.brokerConnectionHash!==sha(conn)||rule.broker!=='pepperstone-ctrader'||
   rule.accountType!=='DEMO'||rule.accountCurrency!=='USD'||
@@ -134,7 +135,7 @@ function setupEarlyCaution(root,owner,conn,now=Date.now()){
 function setupRapid(root,owner,conn,now=Date.now()){
  if(!UUID.test(owner)||!UUID.test(conn))throw Error('RAPID_QUOTE_EXACT_SCOPE_REQUIRED');
  const file=path.join(root,'subminute-quote-activation.json');
- if(!fs.existsSync(file))fs.writeFileSync(file,JSON.stringify({
+ createPrivateOnce(file,JSON.stringify({
   artifact:rapid.ARTIFACT,activatedAt:new Date(now).toISOString(),
   ownerHash:sha(owner),brokerConnectionHash:sha(conn),
   broker:'pepperstone-ctrader',accountType:'DEMO',accountCurrency:'USD',
@@ -142,8 +143,8 @@ function setupRapid(root,owner,conn,now=Date.now()){
   noRetrospectiveScoring:true,brokerOrders:0,
   readOnly:true,autoClose:false,autoStopAmend:false,
   autoModelPromotion:false,
- },null,2),{flag:'wx',mode:0o600});
- const r=JSON.parse(fs.readFileSync(file,'utf8'));
+ },null,2));
+ const r=JSON.parse(readBoundedText(file,1024*1024,'INVALID_ACTIVATION_FILE'));
  if(r.artifact!==rapid.ARTIFACT||r.ownerHash!==sha(owner)||
   r.brokerConnectionHash!==sha(conn)||r.broker!=='pepperstone-ctrader'||
   r.accountType!=='DEMO'||r.accountCurrency!=='USD'||

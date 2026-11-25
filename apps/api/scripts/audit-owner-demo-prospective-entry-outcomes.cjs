@@ -1,4 +1,5 @@
 'use strict';
+const {readBoundedText}=require('./bounded-research-file.cjs');
 /**
  * Derive an aggregated RESEARCH ONLY report from append-only, prospectively
  * captured original entry, +60 second, future quote mark and settled records.
@@ -178,10 +179,9 @@ function readJournal(root,now=Date.now(),days=45){
   .filter(f=>ts(f.slice(0,10)+'T00:00:00Z')>=now-days*86400000)
   .sort();
  for(const f of files){
-  const file=path.join(root,f),stat=fs.statSync(file);
-  if(!stat.isFile()||stat.size>12*1024*1024)
-   throw Error('INVALID_OR_OVERSIZED_PROSPECTIVE_DAY');
-  for(const line of fs.readFileSync(file,'utf8').split('\n')){
+  const file=path.join(root,f);
+  const body=readBoundedText(file,12*1024*1024,'INVALID_OR_OVERSIZED_PROSPECTIVE_DAY');
+  for(const line of body.split('\n')){
    if(!line)continue;
    try{events.push(JSON.parse(line));}catch{invalid++}
    if(events.length>50000)throw Error('PROSPECTIVE_REPORT_EVENT_LIMIT');

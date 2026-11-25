@@ -1,4 +1,5 @@
 'use strict';
+const {appendBoundedText}=require('./bounded-research-file.cjs');
 /**
  * PROSPECTIVE ONLY: immutable previous-M5-context snapshot at +15 seconds
  * into each new five-minute bar. Uses archived broker-positive bid/ask
@@ -115,10 +116,10 @@ function persist(rows,{dir=ROOT,seen=new Set()}={}){
    if(seen.has(k)){duplicates++;continue;}
    const f=path.join(dir,x.decisionAt.slice(0,10)+'.jsonl');
    const line=JSON.stringify(x)+'\n';
-   if((fs.existsSync(f)?fs.statSync(f).size:0)+Buffer.byteLength(line)>MAX_DAY_BYTES){
+   if(!appendBoundedText(f,line,MAX_DAY_BYTES)){
      capped++;continue;
    }
-   fs.appendFileSync(f,line,{mode:0o600});seen.add(k);written++;
+   seen.add(k);written++;
  }
  return {written,duplicates,capped};
 }

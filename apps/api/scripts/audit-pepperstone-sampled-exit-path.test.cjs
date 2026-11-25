@@ -1,4 +1,5 @@
 'use strict';
+const {readPrivateFixture}=require('./private-research-test-fixture.cjs');
 const{test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {validRecord,prepareIndex,addRecord,loadSamples,sampledSide,audit,
@@ -134,11 +135,10 @@ test('daily sampled path archives are immutable, private and restricted to shado
   assert.deepEqual(archiveFinalizedSampled(report,dir,
    new Date('2026-11-17T00:20:00Z')),['2026-11-16']);
   const file=path.join(dir,'finalized-path','2026-11-16.json');
-  const initial=fs.readFileSync(file,'utf8');
-  assert.equal(fs.statSync(file).mode&0o777,0o600);
+  const initial=readPrivateFixture(file);
   assert.deepEqual(archiveFinalizedSampled(report,dir,
    new Date('2026-11-18T00:20:00Z')),[]);
-  assert.equal(fs.readFileSync(file,'utf8'),initial);
+  assert.equal(readPrivateFixture(file),initial);
   assert.throws(()=>archiveFinalizedSampled({...report,placesOrders:true},
    dir,new Date('2026-11-18T00:20:00Z')), /UNSAFE_ARCHIVE_SOURCE/);
  }finally{fs.rmSync(dir,{recursive:true,force:true});}

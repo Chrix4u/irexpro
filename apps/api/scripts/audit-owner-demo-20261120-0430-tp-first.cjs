@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 'use strict';
+const {readBoundedText}=require('./bounded-research-file.cjs');
 /**
  * Read-only owner's Pepperstone USD DEMO trade-window analysis.
  * "Hit TP first" is a SAMPLED path label, never a real broker fill proof.
@@ -36,9 +37,9 @@ function touch(q,t,target,stop){
 }
 function loadQuotes(filename,until=Date.now()){
  const byPair=new Map(),stats={parsed:0,rejected:0,accepted:0};
- if(!fs.existsSync(filename))throw Error('QUOTE_ARCHIVE_MISSING');
- if(fs.statSync(filename).size>30*1024*1024)throw Error('QUOTE_ARCHIVE_OVER_LIMIT');
- const all=fs.readFileSync(filename,'utf8').split('\n');
+ const body=readBoundedText(filename,30*1024*1024,'QUOTE_ARCHIVE_OVER_LIMIT',true);
+ if(body===null)throw Error('QUOTE_ARCHIVE_MISSING');
+ const all=body.split('\n');
  for(const line of all){if(!line)continue;stats.parsed++;
   let raw;try{raw=JSON.parse(line)}catch{stats.rejected++;continue}
   const q=validQuote(raw);

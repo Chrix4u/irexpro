@@ -823,14 +823,22 @@ export class StateReconciliationService {
             // optimistic status CAS, and refuses to book a fill whose native
             // deal id is already attributed to another order row. If a
             // concurrent worker won, no duplicate fill can be booked; retry
-            // rather than overwriting anything.
-            const completed = await this.orderService.applyFill(order.id, {
-              quantity: proof.quantity,
-              price: proof.price,
-              providerOrderId: proof.orderId ?? null,
-              providerPositionId: proof.positionRef,
-              ...(proof.dealId != null ? { providerDealId: proof.dealId } : {}),
-            });
+            // rather than overwriting anything. Deal-less proofs (no native
+            // deal id surfaced) are fenced on the filled_quantity premise the
+            // proof was derived from: a concurrent worker that already moved
+            // the accounting makes this delivery an idempotent no-op — no
+            // identifier is fabricated to dedup on.
+            const completed = await this.orderService.applyFill(
+              order.id,
+              {
+                quantity: proof.quantity,
+                price: proof.price,
+                providerOrderId: proof.orderId ?? null,
+                providerPositionId: proof.positionRef,
+                ...(proof.dealId != null ? { providerDealId: proof.dealId } : {}),
+              },
+              proof.dealId != null ? {} : { expectedFilledQuantity: order.filledQuantity ?? '0' },
+            );
             if (completed.status !== OrderStatus.FILLED)
               throw new Error('Broker-deal-proven close order was not terminally reconciled');
             resolutionRefs.push({
@@ -941,14 +949,22 @@ export class StateReconciliationService {
             // optimistic status CAS, and refuses to book a fill whose native
             // deal id is already attributed to another order row. If a
             // concurrent worker won, no duplicate fill can be booked; retry
-            // rather than overwriting anything.
-            const completed = await this.orderService.applyFill(order.id, {
-              quantity: proof.quantity,
-              price: proof.price,
-              providerOrderId: proof.orderId ?? null,
-              providerPositionId: proof.positionRef,
-              ...(proof.dealId != null ? { providerDealId: proof.dealId } : {}),
-            });
+            // rather than overwriting anything. Deal-less proofs (no native
+            // deal id surfaced) are fenced on the filled_quantity premise the
+            // proof was derived from: a concurrent worker that already moved
+            // the accounting makes this delivery an idempotent no-op — no
+            // identifier is fabricated to dedup on.
+            const completed = await this.orderService.applyFill(
+              order.id,
+              {
+                quantity: proof.quantity,
+                price: proof.price,
+                providerOrderId: proof.orderId ?? null,
+                providerPositionId: proof.positionRef,
+                ...(proof.dealId != null ? { providerDealId: proof.dealId } : {}),
+              },
+              proof.dealId != null ? {} : { expectedFilledQuantity: order.filledQuantity ?? '0' },
+            );
             if (completed.status !== OrderStatus.FILLED)
               throw new Error('Aged DEMO close order was not terminally reconciled');
             resolutionRefs.push({

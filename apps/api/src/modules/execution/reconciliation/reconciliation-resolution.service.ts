@@ -467,15 +467,24 @@ export class ReconciliationResolutionService {
           // path (guarded WHERE status = current + overfill fail-closed).
           // applyFill ITSELF transitions the order (RECONCILIATION_PENDING is
           // fillable) to PARTIALLY_FILLED/FILLED — the fill-bearing state is
-          // reached atomically WITH its economic facts.
+          // reached atomically WITH its economic facts. The delta carries no
+          // native deal id, so it is fenced on the state premise observed
+          // when the delta was derived (order.filledQuantity): a concurrent
+          // sweep that already booked its own delta makes this delivery a
+          // duplicate of state — an idempotent no-op, never a second booking,
+          // and no identifier is fabricated to dedup on.
           const delta = subtractDecimal(providerFilled, order.filledQuantity ?? '0');
           const price = providerOrder.avgFillPrice ?? order.requestedPrice ?? '0';
           if (parseFloat(delta) > 0 && parseFloat(price) > 0) {
-            await this.orderService.applyFill(order.id, {
-              quantity: delta,
-              price,
-              providerOrderId: providerOrder.providerOrderId,
-            });
+            await this.orderService.applyFill(
+              order.id,
+              {
+                quantity: delta,
+                price,
+                providerOrderId: providerOrder.providerOrderId,
+              },
+              { expectedFilledQuantity: order.filledQuantity ?? '0' },
+            );
           }
         }
 
@@ -657,16 +666,29 @@ export class ReconciliationResolutionService {
       return;
     }
     try {
-      const completed = await this.orderService.applyFill(order.id, {
-        quantity: proof.quantity,
-        price: proof.price,
-        // Closing-order identity: native ORDER id from the provider's own
-        // deal record, the POSITION id, and the closing DEAL id. Absent
-        // identifiers stay unknown (never synthesized, never cross-legged).
-        providerOrderId: closedDeal?.providerNativeOrderId ?? null,
-        providerPositionId: closedDeal?.externalOrderId ?? null,
-        providerDealId: closedDeal?.providerDealId ?? null,
-      });
+      // The closing-deal convergence books a genuine native deal when the
+      // provider surfaced its deal id (the ledger dedups replays across ALL
+      // statuses). When no deal id surfaced, the delivery is unidentified
+      // state-derived evidence: it is fenced on the order's filled_quantity
+      // premise observed when the proof was computed, so a concurrent sweep
+      // that already converged the same economics makes this delivery an
+      // idempotent no-op — no fabricated identifier, no double booking.
+      const completed = await this.orderService.applyFill(
+        order.id,
+        {
+          quantity: proof.quantity,
+          price: proof.price,
+          // Closing-order identity: native ORDER id from the provider's own
+          // deal record, the POSITION id, and the closing DEAL id. Absent
+          // identifiers stay unknown (never synthesized, never cross-legged).
+          providerOrderId: closedDeal?.providerNativeOrderId ?? null,
+          providerPositionId: closedDeal?.externalOrderId ?? null,
+          providerDealId: closedDeal?.providerDealId ?? null,
+        },
+        closedDeal?.providerDealId == null
+          ? { expectedFilledQuantity: order.filledQuantity ?? '0' }
+          : {},
+      );
       if (completed.status !== OrderStatus.FILLED) {
         // Partial deal coverage — recorded, not terminal; surfaced, retried.
         this.logger.warn(
@@ -721,16 +743,26 @@ export class ReconciliationResolutionService {
       return;
     }
     try {
-      const completed = await this.orderService.applyFill(order.id, {
-        quantity: proof.quantity,
-        price: proof.price,
-        // ENTRY identity: position only. Native entry order id and native
-        // opening deal id remain explicitly unknown — closing-deal
-        // identifiers must never be assigned to the opening order.
-        providerOrderId: null,
-        providerPositionId: trade.externalPositionId ?? null,
-        providerDealId: null,
-      });
+      // Entry convergence is UNIDENTIFIED evidence by construction (the
+      // native opening deal id was never surfaced — never fabricated). The
+      // state-premise fence makes concurrent duplicate convergence an
+      // idempotent no-op instead of a second booking: the fence compares the
+      // filled_quantity premise this proof was derived from against the
+      // locked row, and a moved row means another worker already converged.
+      const completed = await this.orderService.applyFill(
+        order.id,
+        {
+          quantity: proof.quantity,
+          price: proof.price,
+          // ENTRY identity: position only. Native entry order id and native
+          // opening deal id remain explicitly unknown — closing-deal
+          // identifiers must never be assigned to the opening order.
+          providerOrderId: null,
+          providerPositionId: trade.externalPositionId ?? null,
+          providerDealId: null,
+        },
+        { expectedFilledQuantity: order.filledQuantity ?? '0' },
+      );
       if (completed.status !== OrderStatus.FILLED) {
         this.logger.warn(
           `Stranded entry order ${order.id} for trade ${trade.id} recorded a partial ` +

@@ -1,4 +1,5 @@
 'use strict';
+const {readPrivateFixture}=require('./private-research-test-fixture.cjs');
 const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {
@@ -61,8 +62,7 @@ test('records private append-only, deduplicated next-candle predictions',()=>{
   assert.equal(restoreSeen(dir,new Date(start+60000)).size,1);
   assert.equal(appendPredictions([p],{dir,seen:restoreSeen(dir,new Date(start+60000))}).written,0);
   const f=path.join(dir,'2026-11-17.jsonl');
-  assert.equal(fs.statSync(f).mode&0o777,0o600);
-  assert.ok(!fs.readFileSync(f,'utf8').includes('account_id'));
+  assert.ok(!readPrivateFixture(f).includes('account_id'));
  }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
 test('research prediction must NEVER claim a realized position result or trading authority',()=>{

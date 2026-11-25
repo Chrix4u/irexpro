@@ -1,8 +1,12 @@
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ConfigService } from '@nestjs/config';
 import { ForbiddenException } from '@nestjs/common';
 import {
   AiCounterMirrorReportService,
   projectCounterMirrorReport,
+  readBoundedCounterReport,
 } from './ai-counter-mirror-report.service';
 
 const generatedAt = '2026-11-16T15:40:00.000Z';
@@ -121,5 +125,39 @@ describe('owner-scoped virtual counter report', () => {
     const config = { get: jest.fn().mockReturnValue('owner-uuid') } as unknown as ConfigService;
     const svc = new AiCounterMirrorReportService(config);
     await expect(svc.getOwnerReport('other-user')).rejects.toBeInstanceOf(ForbiddenException);
+  });
+});
+
+describe('bounded counter report descriptor reader', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'irex-counter-report-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('reads a regular bounded file and preserves UTF-8', async () => {
+    const file = join(dir, 'report.json');
+    await writeFile(file, '{"value":"é"}');
+    await expect(readBoundedCounterReport(file)).resolves.toBe('{"value":"é"}');
+  });
+
+  it('rejects empty, oversized and directory inputs', async () => {
+    const file = join(dir, 'report.json');
+    await writeFile(file, '');
+    await expect(readBoundedCounterReport(file)).rejects.toThrow();
+    await writeFile(file, Buffer.alloc(512001));
+    await expect(readBoundedCounterReport(file)).rejects.toThrow();
+    await expect(readBoundedCounterReport(dir)).rejects.toThrow();
+  });
+
+  it('refuses a symlink to another file on the Linux deployment platform', async () => {
+    if (process.platform !== 'linux') return;
+    const file = join(dir, 'report.json');
+    const link = join(dir, 'link.json');
+    await writeFile(file, '{"value":1}');
+    await symlink(file, link);
+    await expect(readBoundedCounterReport(link)).rejects.toThrow();
   });
 });

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 'use strict';
+const {readBoundedText}=require('./bounded-research-file.cjs');
 /**
  * Owner Pepperstone USD DEMO read-only historical M5 parity report.
  * NEVER imports any broker execution module. No order routing.
@@ -24,11 +25,9 @@ function quoteIndex(from,to,sourceDir=SOURCE){
  days.add(to.toISOString().slice(0,10));
  for(const day of days){
    const f=path.join(sourceDir,day+'.jsonl');
-   if(!fs.existsSync(f))continue;
-   const info=fs.statSync(f);
-   if(!info.isFile()||info.size>MAX_FILE_BYTES)
-     throw Error('SOURCE_QUOTE_ARCHIVE_FILE_EXCEEDS_BOUND');
-   for(const line of fs.readFileSync(f,'utf8').split('\n')){
+   const body=readBoundedText(f,MAX_FILE_BYTES,'SOURCE_QUOTE_ARCHIVE_FILE_EXCEEDS_BOUND',true);
+   if(body===null)continue;
+   for(const line of body.split('\n')){
      if(!line)continue;
      let raw;
      try{raw=JSON.parse(line);}catch{rejected++;continue;}

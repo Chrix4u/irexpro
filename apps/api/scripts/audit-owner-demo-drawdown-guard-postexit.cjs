@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 'use strict';
+const {readBoundedText}=require('./bounded-research-file.cjs');
 /**
  * Owner Pepperstone cTrader USD DEMO — read-only audit of what sampled native
  * bid/ask prices did AFTER broker-confirmed five-minute guard exits.
@@ -73,10 +74,10 @@ function loadQuotes(root=ROOT,fromUtc=windowStart(),now=Date.now()){
  for(let dayMs=begin;dayMs<=last;dayMs+=86400000){
   const day=new Date(dayMs).toISOString().slice(0,10);
   const filename=path.join(root,'native-quote-snapshots',day+'.jsonl');
-  if(!fs.existsSync(filename))continue;
-  if(fs.statSync(filename).size>25*1024*1024)throw Error('QUOTE_FILE_SIZE_EXCEEDS_LIMIT');
+  const body=readBoundedText(filename,25*1024*1024,'QUOTE_FILE_SIZE_EXCEEDS_LIMIT',true);
+  if(body===null)continue;
   stats.files++;
-  for(const line of fs.readFileSync(filename,'utf8').split('\n')){
+  for(const line of body.split('\n')){
    if(!line)continue;
    let raw;try{raw=JSON.parse(line)}catch{stats.rejected++;continue}
    const q=validQuote(raw);if(!q){stats.rejected++;continue}
@@ -162,9 +163,9 @@ function loadGuardForecasts(fromUtc=windowStart(),now=Date.now()){
  for(let d=first;d<=last;d+=86400000){
   const name=new Date(d).toISOString().slice(0,10)+'.jsonl';
   const filename=path.join(ROOT,'forming-candle-predictions',name);
-  if(!fs.existsSync(filename))continue;
-  if(fs.statSync(filename).size>20*1024*1024)throw Error('EXPERT_FORECAST_FILE_SIZE_EXCEEDS_LIMIT');
-  for(const line of fs.readFileSync(filename,'utf8').split('\n')){
+  const body=readBoundedText(filename,20*1024*1024,'EXPERT_FORECAST_FILE_SIZE_EXCEEDS_LIMIT',true);
+  if(body===null)continue;
+  for(const line of body.split('\n')){
    if(!line)continue;
    let p;try{p=JSON.parse(line)}catch{continue}
    if(!isSafeForecast(p))continue;

@@ -1,4 +1,5 @@
 'use strict';
+const {readPrivateFixture}=require('./private-research-test-fixture.cjs');
 const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {
@@ -117,8 +118,7 @@ test('summary reader is bounded, atomic and private, and rejects corrupt activat
   const r=writeSummary(dir,Date.parse('2026-11-18T14:09:00Z'));
   assert.equal(r.settledNetUsd,-80);
   const p=path.join(dir,'latest-summary.json');
-  assert.equal(fs.statSync(p).mode&0o777,0o600);
-  assert.equal(JSON.parse(fs.readFileSync(p,'utf8')).capturedEntries,1);
+  assert.equal(JSON.parse(readPrivateFixture(p)).capturedEntries,1);
   fs.writeFileSync(path.join(dir,'activation.json'),JSON.stringify({...marker,artifact:'unknown'}));
   assert.throws(()=>writeSummary(dir,Date.parse('2026-11-18T14:09:00Z')),
    /UNTRUSTED/);

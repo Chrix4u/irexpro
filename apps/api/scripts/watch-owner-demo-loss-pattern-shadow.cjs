@@ -1,4 +1,5 @@
 'use strict';
+const {readBoundedText,createPrivateOnce}=require('./bounded-research-file.cjs');
 /**
  * Owner Pepperstone USD DEMO only. Forward-enrolls OPEN positions <=90s from
  * broker opening, freezes pre-entry features, and later joins settled outcomes.
@@ -380,25 +381,26 @@ function loadActivation(root,owner,at=Date.now(),source=BASELINE_SOURCE){
  fs.mkdirSync(root,{recursive:true,mode:0o700});
  const baselineFile=path.join(root,'frozen-baseline.json');
  const markerFile=path.join(root,'activation.json');
- let marker;
- if(!fs.existsSync(markerFile)){
-  const raw=fs.readFileSync(source,'utf8'),baseline=JSON.parse(raw);
+ const maxBaselineBytes=32*1024*1024;
+ const priorMarker=readBoundedText(markerFile,1024*1024,'INVALID_SHADOW_MARKER',true);
+ if(priorMarker===null){
+  const raw=readBoundedText(source,maxBaselineBytes,'INVALID_SHADOW_BASELINE'),baseline=JSON.parse(raw);
   if(!Array.isArray(baseline.records)||baseline.records.length<10||
      baseline.records.some(x=>date(x.openedAt)>=at)||
      baseline.researchOnly!==true||baseline.modifiesExecution!==false)
    throw Error('INVALID_OR_FUTURE_CONTAMINATED_BASELINE');
   const hash=sha(raw),ownerFingerprint=sha(owner);
-  if(fs.existsSync(baselineFile)){
-   if(sha(fs.readFileSync(baselineFile,'utf8'))!==hash)
-    throw Error('BASELINE_FREEZE_COLLISION');
-  }else fs.writeFileSync(baselineFile,raw,{flag:'wx',mode:0o600});
-  marker={artifact:JOURNAL_SOURCE,activatedAt:iso(at),
+  createPrivateOnce(baselineFile,raw);
+  if(sha(readBoundedText(baselineFile,maxBaselineBytes,'INVALID_SHADOW_BASELINE'))!==hash)
+   throw Error('BASELINE_FREEZE_COLLISION');
+  const marker={artifact:JOURNAL_SOURCE,activatedAt:iso(at),
    baselineSha256:hash,ownerFingerprint,
    frozenRoutes:ROUTES,hypothesisIds:HYPOTHESES.map(x=>x.id),
    riskAndExecutionAuthority:'NONE'};
-  fs.writeFileSync(markerFile,JSON.stringify(marker,null,2),{flag:'wx',mode:0o600});
- }else marker=JSON.parse(fs.readFileSync(markerFile,'utf8'));
- const raw=fs.readFileSync(baselineFile,'utf8');
+  createPrivateOnce(markerFile,JSON.stringify(marker,null,2));
+ }
+ const marker=JSON.parse(readBoundedText(markerFile,1024*1024,'INVALID_SHADOW_MARKER'));
+ const raw=readBoundedText(baselineFile,maxBaselineBytes,'INVALID_SHADOW_BASELINE');
  if(marker.artifact!==JOURNAL_SOURCE||marker.ownerFingerprint!==sha(owner)||
     sha(raw)!==marker.baselineSha256||!(date(marker.activatedAt)<=at)||
     JSON.stringify(marker.hypothesisIds)!==JSON.stringify(HYPOTHESES.map(x=>x.id)))
@@ -410,9 +412,9 @@ function readJournal(root,at=Date.now()){
  const from=at-20*86400000;
  for(const name of fs.readdirSync(root).filter(x=>/^\d{4}-\d{2}-\d{2}\.jsonl$/.test(x)).sort()){
   if(date(name.slice(0,10)+'T00:00:00Z')<from)continue;
-  const file=path.join(root,name),st=fs.statSync(file);
-  if(!st.isFile()||st.size>8*1024*1024)throw Error('OVERSIZED_SHADOW_JOURNAL');
-  for(const line of fs.readFileSync(file,'utf8').split('\n')){
+  const file=path.join(root,name);
+  const body=readBoundedText(file,8*1024*1024,'OVERSIZED_SHADOW_JOURNAL');
+  for(const line of body.split('\n')){
    if(!line)continue;
    const e=JSON.parse(line);events.push(e);
    if(events.length>20000)throw Error('TOO_MANY_SHADOW_EVENTS');

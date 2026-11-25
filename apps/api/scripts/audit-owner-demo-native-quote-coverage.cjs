@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 'use strict';
+const {readBoundedText}=require('./bounded-research-file.cjs');
 // Read-only freshness/coverage summary of the existing broker-native quote archive.
 const fs=require('node:fs'),path=require('node:path');
 const SOURCE='/home/lightworld/webapps/irexpro-research/native-quote-snapshots/2026-11-20.jsonl';
@@ -44,9 +45,8 @@ function summarize(lines,asOf){
       'No user positions, broker settings, lot sizes or exit decisions are changed.']};
 }
 function run(asOf=new Date().toISOString()){
-  const stat=fs.statSync(SOURCE);
-  if(stat.size>36*1024*1024)throw Error('DAY_ARCHIVE_TOO_LARGE');
-  const r=summarize(fs.readFileSync(SOURCE,'utf8').split('\n'),asOf);
+  const body=readBoundedText(SOURCE,36*1024*1024,'DAY_ARCHIVE_TOO_LARGE');
+  const r=summarize(body.split('\n'),asOf);
   fs.mkdirSync(path.dirname(OUT),{recursive:true,mode:0o700});
   fs.writeFileSync(OUT,JSON.stringify(r,null,2),{mode:0o600});
   console.log('OWNER_DEMO_NATIVE_QUOTE_COVERAGE '+JSON.stringify({

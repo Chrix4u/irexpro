@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 'use strict';
+const {readBoundedText}=require('./bounded-research-file.cjs');
 /**
  * Retroactive validation of genuinely prospective (previously persisted)
  * owner-scoped DEMO forming-candle predictions. No trade execution.
@@ -56,9 +57,10 @@ function loadPredictions(dir=ROOT,asOf=new Date()){
  const days=[1,0].map(d=>new Date(asOf.getTime()-d*86400000).toISOString().slice(0,10));
  const rows=[],seen=new Set();
  for(const day of days){
-  const f=path.join(dir,day+'.jsonl');if(!fs.existsSync(f))continue;
-  if(fs.statSync(f).size>25*1024*1024)throw Error('PREDICTION_FILE_BOUNDS_EXCEEDED');
-  for(const line of fs.readFileSync(f,'utf8').split('\n')){
+  const f=path.join(dir,day+'.jsonl');
+  const body=readBoundedText(f,25*1024*1024,'PREDICTION_FILE_BOUNDS_EXCEEDED',true);
+  if(body===null)continue;
+  for(const line of body.split('\n')){
    if(!line)continue;
    let p;try{p=JSON.parse(line)}catch{continue}
    if(!safePrediction(p))continue;

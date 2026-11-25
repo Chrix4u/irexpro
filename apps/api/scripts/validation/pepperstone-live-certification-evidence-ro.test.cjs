@@ -106,3 +106,20 @@ test('rejects ambiguous proof files',()=>{
     assert.equal(x.check().status,'INVALID');
   }finally{x.cleanup()}
 });
+
+test('rejects a symbolic link even when target evidence is genuine',()=>{
+  const x=setup();
+  try{
+    const target=path.join(x.dir,'original-target.json');
+    fs.renameSync(x.originalPath,target);
+    fs.symlinkSync(target,x.originalPath);
+    assert.equal(x.check().status,'INVALID');
+  }finally{x.cleanup()}
+});
+test('rejects an oversized evidence file',()=>{
+  const x=setup();
+  try{
+    fs.writeFileSync(x.originalPath,Buffer.alloc(1024*1024+1,32));
+    assert.equal(x.check().status,'INVALID');
+  }finally{x.cleanup()}
+});

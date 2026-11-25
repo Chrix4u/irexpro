@@ -63,12 +63,16 @@ function persistSnapshots(rows,observedAt,io=fs,dir=ROOT,seen=new Map()){
  const written=[],capped=[];
  for(const [day,lines] of byDay){
   const dest=path.join(dir,day+'.jsonl');
-  const old=io.existsSync(dest)?io.statSync(dest).size:0;
   const chunk=lines.join('');
-  if(old+Buffer.byteLength(chunk)>MAX_DAY_BYTES){
-   capped.push(day);continue;
-  }
-  io.appendFileSync(dest,chunk,{mode:0o600});
+  const fd=io.openSync(dest,fs.constants.O_WRONLY|fs.constants.O_APPEND|fs.constants.O_CREAT|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK,0o600);
+  try{
+   const info=io.fstatSync(fd);
+   if(!info.isFile())throw Error('INVALID_QUOTE_ARCHIVE');
+   if(info.size+Buffer.byteLength(chunk)>MAX_DAY_BYTES){
+    capped.push(day);continue;
+   }
+   io.appendFileSync(fd,chunk);
+  }finally{io.closeSync(fd);}
   written.push({day,count:lines.length,bytes:Buffer.byteLength(chunk)});
  }
  return {accepted:accepted.length,written,capped};
@@ -103,13 +107,23 @@ function restoreSeenFromArchives(io=fs,dir=ROOT,now=new Date()){
  for(const shift of [1,0]){
   const day=new Date(now.getTime()-shift*86400000).toISOString().slice(0,10);
   const file=path.join(dir,day+'.jsonl');
-  if(!io.existsSync(file))continue;
-  const bytes=io.statSync(file).size;
-  if(!(bytes>0&&bytes<=MAX_DAY_BYTES))continue;
-  const size=Math.min(bytes,128*1024),buffer=Buffer.alloc(size);
-  const fd=io.openSync(file,'r');
-  try{io.readSync(fd,buffer,0,size,bytes-size)}finally{io.closeSync(fd)}
-  const lines=buffer.toString('utf8').split('\n');
+  let fd;
+  try{fd=io.openSync(file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK);}
+  catch(err){if(err.code==='ENOENT')continue;throw err;}
+  let body;
+  try{
+   const info=io.fstatSync(fd),bytes=info.size;
+   if(!info.isFile()||!(bytes>0&&bytes<=MAX_DAY_BYTES))continue;
+   const size=Math.min(bytes,128*1024),buffer=Buffer.alloc(size);
+   let offset=0;
+   while(offset<size){
+    const n=io.readSync(fd,buffer,offset,size-offset,bytes-size+offset);
+    if(n===0)break;
+    offset+=n;
+   }
+   body=buffer.toString('utf8',0,offset);
+  }finally{io.closeSync(fd);}
+  const lines=body.split('\n');
   for(const line of lines){
    let row;try{row=JSON.parse(line)}catch{continue}
    if(!Array.isArray(row)||row.length!==5||!VALID_PAIRS.has(row[2]))continue;

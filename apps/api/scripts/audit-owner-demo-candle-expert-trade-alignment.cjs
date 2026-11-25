@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 'use strict';
+const {readBoundedText}=require('./bounded-research-file.cjs');
 /**
  * Read-only, owner-scoped alignment of genuinely prospective, PRE-INTENT
  * M1 forming-candle research forecasts against actual settled DEMO trades.
@@ -55,9 +56,10 @@ function isSafeForecast(p) {
 function loadForecasts(dir=ROOT){
  const byPair=new Map();
  for(const day of ['2026-11-17','2026-11-18','2026-11-19','2026-11-20']){
-  const f=path.join(dir,day+'.jsonl');if(!fs.existsSync(f))continue;
-  if(fs.statSync(f).size>25*1024*1024)throw Error('UNBOUNDED_FORECAST_FILE');
-  for(const line of fs.readFileSync(f,'utf8').split('\n')){
+  const f=path.join(dir,day+'.jsonl');
+  const body=readBoundedText(f,25*1024*1024,'UNBOUNDED_FORECAST_FILE',true);
+  if(body===null)continue;
+  for(const line of body.split('\n')){
    if(!line)continue;let p;try{p=JSON.parse(line)}catch{continue}
    if(!isSafeForecast(p))continue;
    (byPair.get(p.instrument)||byPair.set(p.instrument,[]).get(p.instrument)).push(p);

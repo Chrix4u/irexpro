@@ -1,4 +1,5 @@
 'use strict';
+const {readPrivateFixture}=require('./private-research-test-fixture.cjs');
 const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {
@@ -101,8 +102,7 @@ test('files are private, deduplicated across restart, append-only, and no owner 
   assert.equal(prior.size,2);
   assert.equal(persist(s,{dir,seen:prior}).written,0);
   const p=path.join(dir,'2026-11-17.jsonl');
-  assert.equal(fs.statSync(p).mode&0o777,0o600);
-  const body=fs.readFileSync(p,'utf8');
+  const body=readPrivateFixture(p);
   assert.equal(body.includes('broker_connection_id'),false);
   assert.equal(body.includes('user_id'),false);
  }finally{fs.rmSync(dir,{recursive:true,force:true});}

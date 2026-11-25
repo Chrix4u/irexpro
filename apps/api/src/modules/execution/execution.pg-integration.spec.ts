@@ -29,6 +29,8 @@ import { BrokerMode, IBrokerAdapter } from '../broker/interfaces/broker-adapter.
 import { RiskDecision } from '../risk/interfaces/risk.interface';
 import { RiskGrantService } from '../risk/risk-grant.service';
 import { OrderKind, OrderTimeInForce } from './orders/order.enums';
+import { CreateOrderFillEvidenceLedger1795564800000 } from '../../database/migrations/1795564800000-CreateOrderFillEvidenceLedger';
+import { HardenOrderFillEvidenceLedger1795628400000 } from '../../database/migrations/1795628400000-HardenOrderFillEvidenceLedger';
 
 /**
  * Sprint 50 PR-3 — real-PostgreSQL concurrency proof for the execution
@@ -173,6 +175,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
     });
     await dataSource.initialize();
     await dataSource.query('CREATE SCHEMA IF NOT EXISTS trading');
+    await dataSource.query('DROP TABLE IF EXISTS trading.order_fill_evidence');
     await dataSource.query('DROP TABLE IF EXISTS trading.trades');
     await dataSource.query('DROP TABLE IF EXISTS trading.orders');
     await dataSource.query('DROP TABLE IF EXISTS trading.execution_confirmations');
@@ -377,15 +380,62 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       CREATE UNIQUE INDEX uq_orders_provider_deal_id
         ON trading.orders (broker_connection_id, provider_deal_id)
         WHERE provider_deal_id IS NOT NULL AND provider_deal_id <> ''`);
+    // trading.order_fill_evidence — the immutable per-fill accounting ledger
+    // (applyFill books one row per fill). Applied by running the REAL
+    // migration classes against this fixture schema, so the fixture can never
+    // drift from migrations 1795564800000 + hardening 1795628400000 (the
+    // broker.broker_connections FK target is stood up minimally first).
+    await dataSource.query('CREATE SCHEMA IF NOT EXISTS broker');
+    // Column-compatible stand-in for broker.broker_connections (when another
+    // pg suite has already created the FULL table, this CREATE is a no-op and
+    // the INSERT below must still satisfy its NOT NULL columns).
+    await dataSource.query(
+      `CREATE TABLE IF NOT EXISTS broker.broker_connections (
+         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+         user_id uuid NOT NULL,
+         broker_id varchar(50) NOT NULL,
+         broker_name varchar(100) NOT NULL
+       )`,
+    );
+    // The hardened ledger FK requires the broker connection referenced by
+    // the seeded orders to exist (referential consistency, finding 6).
+    await dataSource.query(
+      `INSERT INTO broker.broker_connections (id, user_id, broker_id, broker_name)
+       VALUES ($1, $2, 'ctrader', 'pg-fixture-connection') ON CONFLICT DO NOTHING`,
+      [connectionId, userId],
+    );
+    await new CreateOrderFillEvidenceLedger1795564800000().up({
+      query: (sql: string) => dataSource.query(sql),
+    } as never);
+    await new HardenOrderFillEvidenceLedger1795628400000().up({
+      query: (sql: string) => dataSource.query(sql),
+    } as never);
   });
 
   afterAll(async () => {
-    if (dataSource?.isInitialized) await dataSource.destroy();
+    // Leave the shared disposable database clean for the other pg suites:
+    // this fixture's ledger table carries the hardening FKs (to
+    // broker.broker_connections and to trading.orders) — dropping IT removes
+    // the dependency that would block another suite's fixture drop.
+    if (dataSource?.isInitialized) {
+      await dataSource.query('DROP TABLE IF EXISTS trading.order_fill_evidence');
+      await dataSource.destroy();
+    }
   });
 
   beforeEach(async () => {
+    // The ledger FK-references orders (ON DELETE RESTRICT), so both tables
+    // must be truncated in ONE statement — PostgreSQL refuses to truncate
+    // a table referenced by a foreign key otherwise. Migration 1795628400000
+    // additionally refuses TRUNCATE of the append-only ledger by default
+    // (statement trigger): the disposable-fixture escape is the session GUC
+    // set INSIDE this transaction (set_config(..., true) = SET LOCAL), the
+    // documented maintenance path for disposable test fixtures only.
+    await dataSource.transaction(async (manager) => {
+      await manager.query("SELECT set_config('irexpro.allow_ledger_truncate', '1', true)");
+      await manager.query('TRUNCATE TABLE trading.order_fill_evidence, trading.orders');
+    });
     await dataSource.query('TRUNCATE TABLE trading.trades');
-    await dataSource.query('TRUNCATE TABLE trading.orders');
     await dataSource.query('TRUNCATE TABLE trading.execution_confirmations');
     await dataSource.query('TRUNCATE TABLE trading.risk_grants');
     await dataSource.query('TRUNCATE TABLE trading.trading_sessions');

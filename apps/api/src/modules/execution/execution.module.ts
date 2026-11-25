@@ -20,6 +20,7 @@ import { RiskGrant } from './entities/risk-grant.entity';
 import { ExecutionConfirmation } from './entities/execution-confirmation.entity';
 import { AiSignalIdentity } from './entities/ai-signal-identity.entity';
 import { Order } from './orders/order.entity';
+import { OrderFillEvidence } from './orders/order-fill-evidence.entity';
 import { OrderService } from './orders/order.service';
 import { RiskProfile } from '../risk/entities/risk-profile.entity';
 import {
@@ -97,6 +98,10 @@ import { DemoProtectedProfitRunnerOrchestrator } from './reconciliation/demo-pro
       ExecutionConfirmation,
       AiSignalIdentity,
       Order,
+      // Immutable per-fill accounting evidence ledger (migration
+      // 1795564800000) — read via raw SQL in OrderService; registered so
+      // the entity metadata is part of the connection schema.
+      OrderFillEvidence,
       BrokerAccount,
       ReconciliationRun,
       ReconciliationDiscrepancy,
