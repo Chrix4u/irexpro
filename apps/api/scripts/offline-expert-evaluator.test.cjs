@@ -40,3 +40,40 @@ test('does not manufacture accuracy or correlations for an empty dataset', () =>
   assert.equal(result.experts[0].balancedAccuracy,null);
   assert.equal(result.pairwise[0].errorCorrelation,null);
 });
+
+test('distinguishes identical errors from complementary errors', () => {
+  const observations = [
+    row('1','UP',[true,true,false]),
+    row('2','DOWN',[true,true,false]),
+    row('3','UP',[false,false,true]),
+    row('4','DOWN',[false,false,true]),
+  ];
+  const result = evaluateExpertEvidence(input(observations));
+  assert.equal(result.pairwise[0].agreementRate,1);
+  assert.equal(result.pairwise[0].bothWrong,2);
+  assert.equal(result.pairwise[0].errorCorrelation,1);
+  assert.equal(result.pairwise[1].agreementRate,0);
+  assert.equal(result.pairwise[1].bothWrong,0);
+  assert.equal(result.pairwise[1].errorCorrelation,-1);
+});
+test('keeps balanced accuracy undefined when one outcome class is absent', () => {
+  const result = evaluateExpertEvidence(input([row('1','UP',[true,true,false])]));
+  assert.equal(result.experts[0].accuracy,1);
+  assert.equal(result.experts[0].balancedAccuracy,null);
+  assert.equal(result.experts[0].calibration.reduce((n,bin)=>n+bin.count,0),1);
+});
+test('calibration covers probability boundaries and never scores unresolved labels', () => {
+  const a = row('1','UP',[true,true,false]);
+  a.evidence.experts[0].directionProbabilityLong = 1;
+  const b = row('2','DOWN',[false,false,true]);
+  b.evidence.experts[0].directionProbabilityLong = 0;
+  const c = row('3',null,[true,true,true]);
+  const result = evaluateExpertEvidence(input([a,b,c]));
+  const score = result.experts[0];
+  assert.equal(score.brierScore,0);
+  assert.equal(score.calibration[0].count,1);
+  assert.equal(score.calibration[0].observedUpRate,0);
+  assert.equal(score.calibration[4].count,1);
+  assert.equal(score.calibration[4].observedUpRate,1);
+  assert.equal(result.unresolved,1);
+});
