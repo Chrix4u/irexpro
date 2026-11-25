@@ -30,6 +30,8 @@ import {
 import { BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { isCurrentFocusedDemoEntryInstrument } from '../ai/demo-focused-instruments';
 import {
+  evaluateM1PrimaryModelDecision,
+  hasServerM1Origin,
   isServerPromotedExternalDemoModel,
   isStrictLiveM1PrimarySignal,
 } from './server-m1-signal-origin';
@@ -326,6 +328,19 @@ export class StrategyOrchestratorService {
           'SIGNAL_INVALID',
           'EXTERNAL_PROVIDER_PAPER_ONLY',
           reason,
+          {
+            admissionDiagnostics: {
+              accountMode: paperConnection?.accountType ?? 'UNKNOWN',
+              primaryModelDecision: evaluateM1PrimaryModelDecision(candidate),
+              serverOriginVerified: hasServerM1Origin(candidate),
+              demoModelRecognized: isServerPromotedExternalDemoModel(candidate),
+              executionMode: session.executionMode,
+              connectionBindingMatches:
+                candidate.brokerConnectionId === session.brokerConnectionId,
+              accountAuthorizationActive: paperConnection?.authorizationStatus === 'ACTIVE',
+              liveTradingEnabled: paperConnection?.liveTradingEnabled === true,
+            },
+          },
         );
         return { outcome: 'SIGNAL_INVALID', signalId, reason };
       }

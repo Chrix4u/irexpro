@@ -1020,6 +1020,24 @@ describe('StrategyOrchestratorService', () => {
         (brokerService.isProductionLiveEligible as jest.Mock).mockReturnValue(scenario.verified);
         const result = await service.processSignal(makeCandidate());
         expect(result.outcome).toBe('SIGNAL_INVALID');
+        expect(auditService.log).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: AuditAction.AI_SIGNAL_IGNORED,
+            metadata: expect.objectContaining({
+              reasonCode: 'EXTERNAL_PROVIDER_PAPER_ONLY',
+              admissionDiagnostics: expect.objectContaining({
+                accountMode: BrokerMode.LIVE,
+                primaryModelDecision: 'QUALIFIED',
+                serverOriginVerified: true,
+                demoModelRecognized: true,
+                executionMode: ExecutionMode.FULL_AUTO,
+                connectionBindingMatches: true,
+                accountAuthorizationActive: scenario.connection.authorizationStatus === 'ACTIVE',
+                liveTradingEnabled: scenario.connection.liveTradingEnabled,
+              }),
+            }),
+          }),
+        );
       }
       expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
       expect(executionService.executeTrade).not.toHaveBeenCalled();
