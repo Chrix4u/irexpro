@@ -192,6 +192,17 @@ export enum RiskRejectionCode {
 
 /** Snapshot of risk state at the time of evaluation — stored in risk_violations */
 export interface RiskContextSnapshot {
+  /** Market stop rejection evidence; observational only, never execution authority. */
+  marketGeometry?: {
+    accountMode: string;
+    direction: 'BUY' | 'SELL';
+    executableEntry: string;
+    stopLoss: string | null;
+    takeProfit: string | null;
+    minimumStopLossPips: string;
+    modelReferenceEntry: string | null;
+    allocationAwarePaperSizing: boolean;
+  };
   userId: string;
   signalId: string;
   killSwitchActive: boolean;

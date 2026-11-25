@@ -1669,6 +1669,22 @@ describe('RiskService', () => {
         expect(result.decision).toBe('REJECTED');
         if (result.decision !== 'REJECTED') throw new Error('Expected a risk rejection');
         expect(result.rejectionCode).toBe(RiskRejectionCode.INVALID_SL_DISTANCE);
+        expect(violationRepo.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            rejectionCode: RiskRejectionCode.INVALID_SL_DISTANCE,
+            riskContext: expect.objectContaining({
+              marketGeometry: expect.objectContaining({
+                accountMode: 'LIVE',
+                direction: 'SELL',
+                executableEntry: ExactDecimal.parse(quote).toString(),
+                stopLoss: '1.10050',
+                takeProfit: '1.09920',
+                modelReferenceEntry: null,
+                allocationAwarePaperSizing: false,
+              }),
+            }),
+          }),
+        );
       },
     );
 
