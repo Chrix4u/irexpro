@@ -3,16 +3,19 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getMetadataArgsStorage } from 'typeorm';
 import { OrderFillEvidence } from './order-fill-evidence.entity';
+import { OrderFillEvidenceClass } from './order.enums';
 
 /**
  * Order-fill-evidence schema reconciliation (accounting-integrity
- * correction 2026-11-25).
+ * correction 2026-11-25 + hardening 1795628400000).
  *
  * Verifies that every column mapped by the OrderFillEvidence entity has a
  * corresponding column in migration 1795564800000's CREATE TABLE
  * trading.order_fill_evidence, and that the ledger's defining guarantees —
  * the connection-scoped partial unique index on the native deal id and the
- * append-only trigger — are part of the same migration.
+ * append-only triggers (UPDATE/DELETE rows + TRUNCATE statements) — are
+ * part of the same two-migration series, with the evidence-class enum in
+ * parity with the HARDENED database CHECK list.
  *
  * Source-level test — no running database required (same pattern as
  * order.schema-reconciliation.spec.ts).
@@ -22,11 +25,18 @@ describe('OrderFillEvidence ledger schema reconciliation', () => {
     __dirname,
     '../../../database/migrations/1795564800000-CreateOrderFillEvidenceLedger.ts',
   );
+  const hardeningPath = path.resolve(
+    __dirname,
+    '../../../database/migrations/1795628400000-HardenOrderFillEvidenceLedger.ts',
+  );
   let migrationSource: string;
+  let hardeningSource: string;
 
   beforeAll(() => {
     expect(fs.existsSync(migrationPath)).toBe(true);
     migrationSource = fs.readFileSync(migrationPath, 'utf-8');
+    expect(fs.existsSync(hardeningPath)).toBe(true);
+    hardeningSource = fs.readFileSync(hardeningPath, 'utf-8');
   });
 
   /** Extract ledger column names from real TypeORM decorator metadata. */
@@ -104,5 +114,55 @@ describe('OrderFillEvidence ledger schema reconciliation', () => {
     expect(entitySource).not.toContain('@UpdateDateColumn');
     expect(entitySource).toContain('@CreateDateColumn');
     expect(entitySource).not.toMatch(/@Column[\s\S]{0,200}nullable:\s*false[\s\S]{0,200}updated/i);
+  });
+
+  // ─── hardening 1795628400000 (independent-review findings 1/5/6) ────────
+
+  it('the enum (incl. LEGACY_BASELINE) is in parity with the hardened DB CHECK list', () => {
+    const enumValues = Object.values(OrderFillEvidenceClass);
+    expect(enumValues).toContain('LEGACY_BASELINE');
+    for (const value of enumValues) {
+      expect(hardeningSource).toContain(`'${value}'`);
+    }
+    // The hardened class CHECK admits exactly the enum's values.
+    const classCheckMatch = hardeningSource.match(
+      /ck_order_fill_evidence_class CHECK \(\n\s*evidence_class IN \(([\s\S]*?)\)\n\s*\)/,
+    );
+    expect(classCheckMatch).not.toBeNull();
+    const admitted = classCheckMatch![1]!.split(',').map((v) => v.trim().replace(/^'|'$/g, ''));
+    expect(admitted.sort()).toEqual([...enumValues].sort());
+  });
+
+  it('the hardened parity CHECK lets LEGACY_BASELINE carry the retained legacy pointer only', () => {
+    expect(hardeningSource).toContain(
+      "(evidence_class = 'PROVIDER_DEAL' AND provider_deal_id IS NOT NULL)",
+    );
+    expect(hardeningSource).toContain("(evidence_class = 'LEGACY_BASELINE')");
+    expect(hardeningSource).toMatch(
+      /evidence_class IN \('POSITION_FACTS','PROVIDER_RESPONSE','PROVIDER_ORDER_STATE'\)[\s\S]{0,120}provider_deal_id IS NULL/,
+    );
+  });
+
+  it('TRUNCATE is refused at the DATABASE level with the operator escape (finding 6)', () => {
+    expect(hardeningSource).toContain('BEFORE TRUNCATE ON trading.order_fill_evidence');
+    expect(hardeningSource).toContain('fn_order_fill_evidence_no_truncate()');
+    expect(hardeningSource).toContain("current_setting('irexpro.allow_ledger_truncate', true)");
+    // The escape does not bypass the trigger — it is a guarded session
+    // acknowledgement on top of the TRUNCATE privilege.
+    expect(hardeningSource).toContain("<> '1'");
+  });
+
+  it('ledger rows are bound to the EXACT broker connection of their order (pair FK)', () => {
+    expect(hardeningSource).toContain(
+      'CREATE UNIQUE INDEX IF NOT EXISTS uq_orders_id_broker_connection',
+    );
+    expect(hardeningSource).toContain('REFERENCES trading.orders (id, broker_connection_id)');
+    expect(hardeningSource).toContain('REFERENCES broker.broker_connections (id)');
+  });
+
+  it('down() refuses to dismantle a populated ledger (export-first, finding 6)', () => {
+    expect(hardeningSource).toContain('SELECT COUNT(*)::int AS n FROM trading.order_fill_evidence');
+    expect(hardeningSource).toContain('IREXPRO_DESTROY_LEDGER_EVIDENCE');
+    expect(hardeningSource).toContain('Export the evidence first');
   });
 });
