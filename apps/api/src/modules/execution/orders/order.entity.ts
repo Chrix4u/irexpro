@@ -85,9 +85,16 @@ export class Order {
   providerPositionId: string | null;
 
   /**
-   * Broker-native DEAL id that proved a reconciliation-booked fill
+   * Broker-native DEAL id that proved the MOST RECENT booked fill
    * (cTrader dealId). Populated only from provider evidence — never
    * fabricated, never inferred from a position or order id.
+   *
+   * ACCOUNTING NOTE (migration 1795564800000): this column is a LATEST-DEAL
+   * POINTER for compatibility/diagnostics — it is OVERWRITTEN by each fill
+   * and therefore cannot detect replays of earlier partial fills. The
+   * authoritative per-fill identifier history and replay detection live in
+   * the immutable append-only ledger trading.order_fill_evidence; duplicate
+   * accounting defence is performed there, never against this pointer.
    */
   @Column({ name: 'provider_deal_id', type: 'varchar', length: 255, nullable: true })
   providerDealId: string | null;

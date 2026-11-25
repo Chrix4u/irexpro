@@ -79,15 +79,55 @@ function entity(overrides: Partial<Order> = {}): Order {
   } as Order;
 }
 
-/** Mock DataSource whose transaction() invokes the callback with a fake manager. */
+/** Mock DataSource whose transaction() invokes the callback with a fake
+ *  manager that DELEGATES to the (reassignable) ds.query — applyFill now
+ *  runs every statement (row lock, ledger dedup read, evidence INSERT,
+ *  order-row UPDATE) through the transaction manager, so per-query mocks
+ *  swapped onto dataSource.query must be visible inside the transaction. */
 function mockDataSource(
-  managerQuery: (sql: string, params?: unknown[]) => Promise<Record<string, unknown>[]>,
+  defaultQuery: (sql: string, params?: unknown[]) => Promise<Record<string, unknown>[]>,
 ) {
-  const manager = { query: managerQuery };
+  const ds = {
+    query: jest.fn(defaultQuery),
+    transaction: jest.fn(async (cb: (m: unknown) => Promise<unknown>) =>
+      cb({ query: (sql: string, params?: unknown[]) => ds.query(sql, params) }),
+    ),
+  };
+  return ds as unknown as DataSource;
+}
+
+/** All recorded query calls whose SQL contains the fragment (order kept). */
+function callsMatching(query: { mock: { calls: unknown[][] } }, fragment: string) {
+  return query.mock.calls.filter((call) => (call[0] as string).includes(fragment));
+}
+
+/** Statement-order facts for a recorded query mock (lock first; insert precedes update). */
+function queryCallOrder(query: { mock: { calls: unknown[][] } }) {
+  const firstIndex = (fragment: string) =>
+    query.mock.calls.findIndex((call) => (call[0] as string).includes(fragment));
+  const lastIndex = (fragment: string) => {
+    for (let i = query.mock.calls.length - 1; i >= 0; i--) {
+      if ((query.mock.calls[i]![0] as string).includes(fragment)) return i;
+    }
+    return -1;
+  };
   return {
-    transaction: jest.fn(async (cb: (m: unknown) => Promise<unknown>) => cb(manager)),
-    query: managerQuery,
-  } as unknown as DataSource;
+    lockFirst: firstIndex('FOR UPDATE') === 0,
+    insertBeforeUpdate:
+      lastIndex('INSERT INTO trading.order_fill_evidence') < lastIndex('UPDATE trading.orders'),
+  };
+}
+
+/** Exact decimal addition on quantity strings (scale ≤ 4) — BigInt, never floats. */
+function addQuantity(a: string, b: string): string {
+  const toQ = (s: string): bigint => {
+    const [i, f = ''] = s.split('.');
+    return BigInt(i) * 10000n + BigInt((f + '0000').slice(0, 4));
+  };
+  const total = toQ(a) + toQ(b);
+  const negative = total < 0n;
+  const abs = (negative ? -total : total).toString().padStart(5, '0');
+  return `${negative ? '-' : ''}${abs.slice(0, -4)}.${abs.slice(-4)}`;
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -431,15 +471,23 @@ describe('OrderService', () => {
       );
     });
 
-    it('applies a fill via atomic numeric SQL with optimistic concurrency', async () => {
+    it('locks the order row first and applies a fill via atomic numeric SQL with optimistic concurrency', async () => {
       orderRepo.findOne.mockResolvedValueOnce(entity({ status: OrderStatus.ACKNOWLEDGED }));
-      const query = jest.fn(async (_sql: string, _params?: unknown[]) => [
-        rawRow({
-          status: OrderStatus.PARTIALLY_FILLED,
-          filled_quantity: '0.2000',
-          avg_fill_price: '1.10000000',
-        }),
-      ]);
+      const query = jest.fn(async (sql: string, _params?: unknown[]) => {
+        if (sql.includes('FOR UPDATE')) {
+          return [rawRow({ status: OrderStatus.ACKNOWLEDGED })];
+        }
+        if (sql.startsWith('INSERT INTO trading.order_fill_evidence')) {
+          return [];
+        }
+        return [
+          rawRow({
+            status: OrderStatus.PARTIALLY_FILLED,
+            filled_quantity: '0.2000',
+            avg_fill_price: '1.10000000',
+          }),
+        ];
+      });
       (dataSource as unknown as { query: jest.Mock }).query = query;
 
       const updated = await service.applyFill('order-1', {
@@ -450,24 +498,39 @@ describe('OrderService', () => {
       expect(updated.status).toBe(OrderStatus.PARTIALLY_FILLED);
       expect(updated.filledQuantity).toBe('0.2000');
 
-      const [sql, params] = query.mock.calls[0];
+      // The row lock is the FIRST statement — concurrent fill accounting for
+      // the same order is serialized before any ledger read or write.
+      expect(query.mock.calls[0]![0]).toContain('FOR UPDATE');
+
+      const [sql, params] = callsMatching(query, 'UPDATE trading.orders')[0]!;
       expect(sql).toContain('avg_fill_price * filled_quantity');
       expect(params).toEqual(
         expect.arrayContaining(['order-1', '0.2000', '1.10000000', 'prov-9', 'ACKNOWLEDGED']),
       );
     });
 
-    it('persists native position and deal identifiers alongside the fill (identity separation)', async () => {
+    it('persists native position and deal identifiers alongside the fill (identity separation, ledger row appended)', async () => {
       orderRepo.findOne.mockResolvedValueOnce(entity({ status: OrderStatus.ACKNOWLEDGED }));
-      const query = jest.fn(async (_sql: string, _params?: unknown[]) => [
-        rawRow({
-          status: OrderStatus.FILLED,
-          filled_quantity: '0.5000',
-          avg_fill_price: '1.08500000',
-          provider_position_id: 'pos-77',
-          provider_deal_id: 'deal-951',
-        }),
-      ]);
+      const query = jest.fn(async (sql: string, _params?: unknown[]) => {
+        if (sql.includes('FOR UPDATE')) {
+          return [rawRow({ status: OrderStatus.ACKNOWLEDGED })];
+        }
+        if (sql.includes('SELECT order_id FROM trading.order_fill_evidence')) {
+          return []; // no ledger row owns deal-951 yet
+        }
+        if (sql.startsWith('INSERT INTO trading.order_fill_evidence')) {
+          return [];
+        }
+        return [
+          rawRow({
+            status: OrderStatus.FILLED,
+            filled_quantity: '0.5000',
+            avg_fill_price: '1.08500000',
+            provider_position_id: 'pos-77',
+            provider_deal_id: 'deal-951',
+          }),
+        ];
+      });
       (dataSource as unknown as { query: jest.Mock }).query = query;
 
       const updated = await service.applyFill('order-1', {
@@ -477,9 +540,28 @@ describe('OrderService', () => {
         providerPositionId: 'pos-77',
         providerDealId: 'deal-951',
       });
-      // The deal-attribution pre-check (SELECT) runs first; the UPDATE is the
-      // second query call.
-      const [sql, params] = query.mock.calls[1];
+      // The ledger dedup read runs after the row lock; the order-row UPDATE
+      // is the final statement of the transaction.
+      const ledgerRead = callsMatching(query, 'SELECT order_id FROM trading.order_fill_evidence');
+      expect(ledgerRead).toHaveLength(1);
+      expect(ledgerRead[0]![0]).toContain('provider_deal_id = $2');
+
+      const insert = callsMatching(query, 'INSERT INTO trading.order_fill_evidence')[0]!;
+      expect(insert[0]).toContain('evidence_class');
+      expect(insert[1]).toEqual(
+        expect.arrayContaining([
+          'order-1',
+          baseInput.brokerConnectionId,
+          'deal-951',
+          'order-951',
+          'pos-77',
+          '0.5000',
+          '1.08500000',
+          'PROVIDER_DEAL',
+        ]),
+      );
+
+      const [sql, params] = callsMatching(query, 'UPDATE trading.orders')[0]!;
       expect(sql).toContain('provider_position_id = COALESCE($6, provider_position_id)');
       expect(sql).toContain('provider_deal_id = COALESCE($7, provider_deal_id)');
       expect(params).toEqual(
@@ -501,8 +583,14 @@ describe('OrderService', () => {
       // TypeORM's Postgres driver returns [rows, rowCount] for UPDATE queries
       // even with RETURNING * — the hydrated result must still be the row.
       orderRepo.findOne.mockResolvedValueOnce(entity({ status: OrderStatus.ACKNOWLEDGED }));
-      (dataSource as unknown as { query: jest.Mock }).query = jest.fn(
-        async (_sql: string, _params?: unknown[]) => [
+      const query = jest.fn(async (sql: string, _params?: unknown[]) => {
+        if (sql.includes('FOR UPDATE')) {
+          return [rawRow({ status: OrderStatus.ACKNOWLEDGED })];
+        }
+        if (sql.startsWith('INSERT INTO trading.order_fill_evidence')) {
+          return [];
+        }
+        return [
           [
             rawRow({
               status: OrderStatus.FILLED,
@@ -512,8 +600,9 @@ describe('OrderService', () => {
             }),
           ],
           1,
-        ],
-      );
+        ];
+      });
+      (dataSource as unknown as { query: jest.Mock }).query = query;
 
       const updated = await service.applyFill('order-1', {
         quantity: '0.5000',
@@ -526,7 +615,7 @@ describe('OrderService', () => {
       expect(updated.providerOrderId).toBe('prov-77');
     });
 
-    it('overfill (0 rows affected, still fillable) fails closed with Conflict', async () => {
+    it('overfill (0 rows affected, still fillable) fails closed with Conflict — evidence row rolls back with it', async () => {
       orderRepo.findOne
         .mockResolvedValueOnce(
           entity({ status: OrderStatus.ACKNOWLEDGED, filledQuantity: '0.4000' }),
@@ -534,22 +623,43 @@ describe('OrderService', () => {
         .mockResolvedValueOnce(
           entity({ status: OrderStatus.ACKNOWLEDGED, filledQuantity: '0.4000' }),
         );
-      (dataSource as unknown as { query: jest.Mock }).query = jest.fn(
-        async (_sql: string, _params?: unknown[]) => [],
-      );
+      const query = jest.fn(async (sql: string, _params?: unknown[]) => {
+        if (sql.includes('FOR UPDATE')) {
+          return [rawRow({ status: OrderStatus.ACKNOWLEDGED, filled_quantity: '0.4000' })];
+        }
+        if (sql.startsWith('INSERT INTO trading.order_fill_evidence')) {
+          return [];
+        }
+        return []; // UPDATE matches 0 rows — overfill
+      });
+      (dataSource as unknown as { query: jest.Mock }).query = query;
 
       await expect(
         service.applyFill('order-1', { quantity: '0.2000', price: '1.1' }),
       ).rejects.toThrow(/exceeds remaining quantity/);
+
+      // All-or-nothing: the evidence INSERT ran inside the SAME transaction as
+      // the refused UPDATE — the thrown Conflict rolls the whole transaction
+      // back, so no accounting event survives a refused fill.
+      const order = queryCallOrder(query as unknown as { mock: { calls: unknown[][] } });
+      expect(order.insertBeforeUpdate).toBe(true);
+      expect(callsMatching(query, 'INSERT INTO trading.order_fill_evidence')).toHaveLength(1);
     });
 
     it('concurrent state change (0 rows, no longer fillable) throws Conflict', async () => {
       orderRepo.findOne
         .mockResolvedValueOnce(entity({ status: OrderStatus.ACKNOWLEDGED }))
         .mockResolvedValueOnce(entity({ status: OrderStatus.CANCELLED }));
-      (dataSource as unknown as { query: jest.Mock }).query = jest.fn(
-        async (_sql: string, _params?: unknown[]) => [],
-      );
+      const query = jest.fn(async (sql: string, _params?: unknown[]) => {
+        if (sql.includes('FOR UPDATE')) {
+          return [rawRow({ status: OrderStatus.ACKNOWLEDGED })];
+        }
+        if (sql.startsWith('INSERT INTO trading.order_fill_evidence')) {
+          return [];
+        }
+        return []; // UPDATE matches 0 rows — status CAS fails
+      });
+      (dataSource as unknown as { query: jest.Mock }).query = query;
 
       await expect(service.applyFill('order-1', { quantity: '0.1', price: '1.1' })).rejects.toThrow(
         /state changed concurrently/,
@@ -560,8 +670,8 @@ describe('OrderService', () => {
   // ─── applyFill — native deal attribution guards (duplicate-deal prevention) ──
 
   describe('applyFill — native deal attribution guards', () => {
-    it('ignores a duplicate fill for a provider deal already booked on THIS order (idempotent no-op)', async () => {
-      orderRepo.findOne.mockResolvedValueOnce(
+    it('ignores a duplicate fill for a provider deal already booked on THIS order (ledger replay, idempotent no-op)', async () => {
+      orderRepo.findOne.mockResolvedValue(
         entity({
           status: OrderStatus.PARTIALLY_FILLED,
           providerDealId: 'deal-951',
@@ -569,25 +679,89 @@ describe('OrderService', () => {
           avgFillPrice: '1.10000000',
         }),
       );
-      const query = jest.fn(async () => [rawRow({})]);
+      const query = jest.fn(async (sql: string) => {
+        if (sql.includes('FOR UPDATE')) {
+          return [
+            rawRow({
+              status: OrderStatus.PARTIALLY_FILLED,
+              provider_deal_id: 'deal-951',
+              filled_quantity: '0.2500',
+              avg_fill_price: '1.10000000',
+            }),
+          ];
+        }
+        if (sql.includes('SELECT order_id FROM trading.order_fill_evidence')) {
+          return [{ order_id: 'order-1' }]; // the ledger remembers the booked deal
+        }
+        return [rawRow({})];
+      });
       (dataSource as unknown as { query: jest.Mock }).query = query;
 
       // The SAME broker deal event delivered a second time (duplicate
-      // provider event / repeated reconciliation) must never book twice.
+      // provider event / repeated or concurrent reconciliation) must never
+      // book twice.
       const unchanged = await service.applyFill('order-1', {
         quantity: '0.2500',
         price: '1.10000000',
         providerDealId: 'deal-951',
       });
-      expect(query).not.toHaveBeenCalled(); // no second UPDATE — no double fill
+      // Row lock + ledger read — NO evidence INSERT, NO order-row UPDATE.
+      expect(query).toHaveBeenCalledTimes(2);
+      expect(callsMatching(query, 'INSERT INTO trading.order_fill_evidence')).toHaveLength(0);
+      expect(callsMatching(query, 'UPDATE trading.orders')).toHaveLength(0);
       expect(unchanged.providerDealId).toBe('deal-951');
       expect(unchanged.filledQuantity).toBe('0.2500');
     });
 
-    it('refuses to book a provider deal already attributed to a DIFFERENT order row', async () => {
-      orderRepo.findOne.mockResolvedValueOnce(entity({ status: OrderStatus.ACKNOWLEDGED }));
-      const query = jest.fn();
-      query.mockResolvedValueOnce([{ id: 'order-other' }]); // findDealOwner hit
+    it('ignores a duplicate fill known only through the legacy order-row pointer (pre-ledger population)', async () => {
+      orderRepo.findOne.mockResolvedValue(
+        entity({
+          status: OrderStatus.PARTIALLY_FILLED,
+          providerDealId: 'deal-951',
+          filledQuantity: '0.2500',
+          avgFillPrice: '1.10000000',
+        }),
+      );
+      const query = jest.fn(async (sql: string) => {
+        if (sql.includes('FOR UPDATE')) {
+          return [
+            rawRow({
+              status: OrderStatus.PARTIALLY_FILLED,
+              provider_deal_id: 'deal-951',
+              filled_quantity: '0.2500',
+              avg_fill_price: '1.10000000',
+            }),
+          ];
+        }
+        if (sql.includes('SELECT order_id FROM trading.order_fill_evidence')) {
+          return []; // booked BEFORE the ledger existed — no row (never fabricated)
+        }
+        return [rawRow({})];
+      });
+      (dataSource as unknown as { query: jest.Mock }).query = query;
+
+      const unchanged = await service.applyFill('order-1', {
+        quantity: '0.2500',
+        price: '1.10000000',
+        providerDealId: 'deal-951',
+      });
+      // Row lock + ledger read only — the legacy pointer prevented the rebook.
+      expect(query).toHaveBeenCalledTimes(2);
+      expect(callsMatching(query, 'UPDATE trading.orders')).toHaveLength(0);
+      expect(unchanged.filledQuantity).toBe('0.2500');
+    });
+
+    it('refuses to book a provider deal already attributed to a DIFFERENT order row (ledger ownership)', async () => {
+      orderRepo.findOne.mockResolvedValue(entity({ status: OrderStatus.ACKNOWLEDGED }));
+      const query = jest.fn(async (sql: string) => {
+        if (sql.includes('FOR UPDATE')) {
+          return [rawRow({ status: OrderStatus.ACKNOWLEDGED })];
+        }
+        if (sql.includes('SELECT order_id FROM trading.order_fill_evidence')) {
+          return [{ order_id: 'order-other' }]; // ledger row on ANOTHER order
+        }
+        return [];
+      });
       (dataSource as unknown as { query: jest.Mock }).query = query;
 
       await expect(
@@ -597,27 +771,34 @@ describe('OrderService', () => {
           providerDealId: 'deal-951',
         }),
       ).rejects.toThrow(/already attributed to order order-other/);
-      expect(query).toHaveBeenCalledTimes(1);
-      const [sql, params] = query.mock.calls[0] as unknown as [string, unknown[]];
-      expect(sql).toContain('SELECT id FROM trading.orders');
+      expect(query).toHaveBeenCalledTimes(2); // row lock + ledger read — refused before any write
+      const [sql, params] = query.mock.calls[1] as unknown as [string, unknown[]];
+      expect(sql).toContain('FROM trading.order_fill_evidence');
       expect(sql).toContain('provider_deal_id = $2');
       expect(params).toEqual(expect.arrayContaining([baseInput.brokerConnectionId, 'deal-951']));
     });
 
-    it('translates a concurrent unique-index violation into a duplicate-attribution Conflict', async () => {
-      orderRepo.findOne.mockResolvedValueOnce(entity({ status: OrderStatus.ACKNOWLEDGED }));
-      const query = jest.fn();
-      query.mockResolvedValueOnce([]); // ownership pre-check: no current owner
-      query.mockRejectedValueOnce(
-        Object.assign(new Error('duplicate key value violates unique constraint'), {
-          code: '23505',
-        }),
-      );
+    it('translates a concurrent ledger unique-index violation (INSERT 23505) into a duplicate-attribution Conflict', async () => {
+      orderRepo.findOne.mockResolvedValue(entity({ status: OrderStatus.ACKNOWLEDGED }));
+      const query = jest.fn(async (sql: string) => {
+        if (sql.includes('FOR UPDATE')) {
+          return [rawRow({ status: OrderStatus.ACKNOWLEDGED })];
+        }
+        if (sql.includes('SELECT order_id FROM trading.order_fill_evidence')) {
+          return []; // ledger read: no committed owner YET
+        }
+        if (sql.startsWith('INSERT INTO trading.order_fill_evidence')) {
+          // A concurrent worker booked the same deal onto another row between
+          // the ledger read and this INSERT — the partial unique index
+          // uq_order_fill_evidence_deal refuses it.
+          throw Object.assign(new Error('duplicate key value violates unique constraint'), {
+            code: '23505',
+          });
+        }
+        return [];
+      });
       (dataSource as unknown as { query: jest.Mock }).query = query;
 
-      // A concurrent worker booked the same deal onto another row between the
-      // pre-check and the UPDATE — the partial unique index refuses it and
-      // the failure surfaces as an explicit duplicate-attribution conflict.
       const promise = service.applyFill('order-1', {
         quantity: '0.5000',
         price: '1.10000000',
@@ -647,6 +828,300 @@ describe('OrderService', () => {
       await expect(
         service.findDealOwner(baseInput.brokerConnectionId, 'deal-9'),
       ).resolves.toBeNull();
+    });
+  });
+
+  // ─── applyFill — immutable per-fill evidence ledger ──────────────────────
+
+  describe('applyFill — immutable per-fill evidence ledger (partial-fill replay defence)', () => {
+    /**
+     * Stateful in-memory model of the two tables applyFill touches —
+     * trading.order_fill_evidence (append-only rows keyed by deal id) and
+     * the trading.orders row (latest-deal pointer + filled_quantity). The
+     * model mirrors the real statements' semantics so the confirmed
+     * partial-fill replay defect is reproduced honestly at the mock level.
+     */
+    function statefulLedgerModel(options?: {
+      requestedQuantity?: string;
+      ledgerSeed?: Array<{ dealId: string; orderId: string }>;
+    }) {
+      let orderRow = rawRow({
+        status: OrderStatus.ACKNOWLEDGED,
+        requested_quantity: options?.requestedQuantity ?? '0.5000',
+        filled_quantity: '0',
+        provider_deal_id: null,
+        avg_fill_price: null,
+      });
+      const ledger: Array<{
+        dealId: string | null;
+        orderId: string;
+        quantity: string;
+        price: string;
+        evidenceClass: string;
+      }> = (options?.ledgerSeed ?? []).map((seed) => ({
+        dealId: seed.dealId,
+        orderId: seed.orderId,
+        quantity: '0.0000',
+        price: '0.00000000',
+        evidenceClass: 'PROVIDER_DEAL',
+      }));
+
+      orderRepo.findOne.mockResolvedValue(
+        entity({
+          status: OrderStatus.ACKNOWLEDGED,
+          requestedQuantity: orderRow.requested_quantity as string,
+        }),
+      );
+
+      const query = jest.fn(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('FOR UPDATE')) {
+          return [orderRow];
+        }
+        if (sql.includes('SELECT order_id FROM trading.order_fill_evidence')) {
+          const dealId = params![1] as string;
+          const hit = ledger.find((r) => r.dealId === dealId);
+          return hit ? [{ order_id: hit.orderId }] : [];
+        }
+        if (sql.startsWith('INSERT INTO trading.order_fill_evidence')) {
+          const [orderId, , dealId, , , quantity, price, evidenceClass] = params as unknown[];
+          ledger.push({
+            dealId: (dealId as string | null) ?? null,
+            orderId: orderId as string,
+            quantity: quantity as string,
+            price: price as string,
+            evidenceClass: evidenceClass as string,
+          });
+          return [];
+        }
+        if (sql.includes('UPDATE trading.orders')) {
+          const qty = params![1] as string;
+          const price = params![2] as string;
+          const deal = (params![6] as string | null) ?? null;
+          const filled = addQuantity(orderRow.filled_quantity as string, qty);
+          const filledInt = BigInt(filled.replace('.', ''));
+          const requestedInt = BigInt((orderRow.requested_quantity as string).replace('.', ''));
+          if (filledInt > requestedInt) {
+            return []; // overfill — WHERE clause fails closed
+          }
+          orderRow = rawRow({
+            ...orderRow,
+            filled_quantity: filled,
+            avg_fill_price: orderRow.avg_fill_price ?? price,
+            status:
+              filled === orderRow.requested_quantity ? OrderStatus.FILLED : 'PARTIALLY_FILLED',
+            provider_deal_id: deal ?? (orderRow.provider_deal_id as string | null),
+          });
+          return [orderRow];
+        }
+        throw new Error(`unexpected SQL in model: ${sql}`);
+      });
+      (dataSource as unknown as { query: jest.Mock }).query = query;
+      return { query, ledger, orderRowRef: () => orderRow };
+    }
+
+    it('defeats the confirmed partial-fill replay defect (A 0.10, B 0.10, replayed A stays 0.20)', async () => {
+      const model = statefulLedgerModel();
+      const fillA = { quantity: '0.1000', price: '1.10000000', providerDealId: 'deal-A' };
+      const fillB = { quantity: '0.1000', price: '1.20000000', providerDealId: 'deal-B' };
+
+      const afterA = await service.applyFill('order-1', fillA);
+      expect(afterA.filledQuantity).toBe('0.1000');
+
+      const afterB = await service.applyFill('order-1', fillB);
+      expect(afterB.filledQuantity).toBe('0.2000');
+      // The order-row pointer now remembers ONLY deal-B — the exact
+      // precondition of the confirmed defect (the identifier of fill A is
+      // no longer on the order row).
+      expect(afterB.providerDealId).toBe('deal-B');
+
+      // REPLAY of partial fill A: its identifier survives in the IMMUTABLE
+      // ledger (not the overwritten pointer) — the replay is detected and
+      // ignored instead of inflating the total to 0.3000.
+      const replayed = await service.applyFill('order-1', fillA);
+      expect(replayed.filledQuantity).toBe('0.2000');
+      expect(replayed.status).toBe('PARTIALLY_FILLED');
+
+      // Exactly two evidence rows, two order-row updates — never three.
+      expect(model.ledger.map((r) => r.dealId)).toEqual(['deal-A', 'deal-B']);
+      expect(callsMatching(model.query, 'INSERT INTO trading.order_fill_evidence')).toHaveLength(2);
+      expect(callsMatching(model.query, 'UPDATE trading.orders')).toHaveLength(2);
+    });
+
+    it('replays of the LATEST fill stay idempotent too (pointer and ledger agree)', async () => {
+      const model = statefulLedgerModel();
+      await service.applyFill('order-1', {
+        quantity: '0.1000',
+        price: '1.10000000',
+        providerDealId: 'deal-A',
+      });
+      await service.applyFill('order-1', {
+        quantity: '0.1000',
+        price: '1.20000000',
+        providerDealId: 'deal-B',
+      });
+      const replayed = await service.applyFill('order-1', {
+        quantity: '0.1000',
+        price: '1.20000000',
+        providerDealId: 'deal-B',
+      });
+      expect(replayed.filledQuantity).toBe('0.2000');
+      expect(callsMatching(model.query, 'UPDATE trading.orders')).toHaveLength(2);
+    });
+
+    it('records fills without a native deal id honestly (NULL identifier, real evidence class, no replay defence)', async () => {
+      const model = statefulLedgerModel();
+
+      // Live dispatch shape: fill from the provider response, position id
+      // present, no deal id → POSITION_FACTS.
+      const afterFirst = await service.applyFill('order-1', {
+        quantity: '0.1000',
+        price: '1.10000000',
+        providerPositionId: 'pos-77',
+      });
+      expect(afterFirst.filledQuantity).toBe('0.1000');
+      expect(model.ledger[0]!.dealId).toBeNull();
+      expect(model.ledger[0]!.evidenceClass).toBe('POSITION_FACTS');
+
+      // Reconciliation order-state shape: no identifiers at all →
+      // PROVIDER_ORDER_STATE.
+      const afterSecond = await service.applyFill('order-1', {
+        quantity: '0.1000',
+        price: '1.15000000',
+      });
+      expect(afterSecond.filledQuantity).toBe('0.2000');
+      expect(model.ledger[1]!.dealId).toBeNull();
+      expect(model.ledger[1]!.evidenceClass).toBe('PROVIDER_ORDER_STATE');
+
+      // HONEST LIMITATION (documented, asserted): without an identifier the
+      // ledger cannot detect a replay of the SAME unidentified event — the
+      // quantity grows again. This is the boundary of incomplete evidence;
+      // deal-grade replays are the ones that must never double-book.
+      const afterReplay = await service.applyFill('order-1', {
+        quantity: '0.1000',
+        price: '1.15000000',
+      });
+      expect(afterReplay.filledQuantity).toBe('0.3000');
+      expect(model.ledger).toHaveLength(3);
+    });
+
+    it('passes exact decimal strings into the ledger INSERT (no float coercion)', async () => {
+      const model = statefulLedgerModel();
+      await service.applyFill('order-1', {
+        quantity: '0.1000',
+        price: '1.12345678',
+        providerOrderId: 'prov-1',
+        providerDealId: 'deal-A',
+      });
+      const insert = callsMatching(model.query, 'INSERT INTO trading.order_fill_evidence')[0]!;
+      expect(insert[1]).toEqual(
+        expect.arrayContaining([
+          'order-1',
+          baseInput.brokerConnectionId,
+          'deal-A',
+          'prov-1',
+          '0.1000',
+          '1.12345678',
+          'PROVIDER_DEAL',
+        ]),
+      );
+      // No numeric-string was stringified through a float first.
+      expect(insert[1]).not.toEqual(expect.arrayContaining([0.1, 1.12345678]));
+    });
+
+    it('transactional all-or-nothing: a refused overfill leaves no surviving evidence row', async () => {
+      const model = statefulLedgerModel({ requestedQuantity: '0.2000' });
+      const afterFirst = await service.applyFill('order-1', {
+        quantity: '0.1500',
+        price: '1.10000000',
+        providerDealId: 'deal-A',
+      });
+      expect(afterFirst.status).toBe('PARTIALLY_FILLED');
+      expect(afterFirst.filledQuantity).toBe('0.1500');
+
+      // The second (deal-bearing) fill overfills: 0.1500 + 0.1000 > 0.2000 —
+      // the UPDATE's WHERE fails closed → ConflictException; the transaction
+      // (and its evidence INSERT) rolls back together — a refused fill leaves
+      // no accounting event behind.
+      orderRepo.findOne.mockResolvedValue(
+        entity({
+          status: OrderStatus.PARTIALLY_FILLED,
+          filledQuantity: '0.1500',
+          requestedQuantity: '0.2000',
+        }),
+      );
+      await expect(
+        service.applyFill('order-1', {
+          quantity: '0.1000',
+          price: '1.20000000',
+          providerDealId: 'deal-B',
+        }),
+      ).rejects.toThrow(/exceeds remaining quantity/);
+
+      // The evidence INSERT for deal-B ran inside the SAME transaction as the
+      // refused UPDATE (statement order proves the shared transaction); a
+      // real PostgreSQL rolls both back — the ledger stays at one row.
+      const order = queryCallOrder(model.query as unknown as { mock: { calls: unknown[][] } });
+      expect(order.insertBeforeUpdate).toBe(true);
+      expect(
+        callsMatching(
+          model.query as unknown as { mock: { calls: unknown[][] } },
+          'INSERT INTO trading.order_fill_evidence',
+        ),
+      ).toHaveLength(2);
+    });
+
+    it('locks the order row (FOR UPDATE) before any ledger read or write (concurrent fill serialisation)', async () => {
+      const model = statefulLedgerModel();
+      await service.applyFill('order-1', {
+        quantity: '0.1000',
+        price: '1.10000000',
+        providerDealId: 'deal-A',
+      });
+      const firstSql = model.query.mock.calls[0]![0] as string;
+      expect(firstSql).toContain('FOR UPDATE');
+      const order = queryCallOrder(model.query as unknown as { mock: { calls: unknown[][] } });
+      expect(order.lockFirst).toBe(true);
+    });
+
+    it('findFillEvidenceByOrderId returns the ordered ledger view (read-only)', async () => {
+      const query = jest.fn().mockResolvedValue([
+        {
+          id: 'ev-1',
+          order_id: 'order-1',
+          broker_connection_id: baseInput.brokerConnectionId,
+          provider_deal_id: 'deal-A',
+          provider_order_id: 'prov-1',
+          provider_position_id: null,
+          quantity: '0.1000',
+          price: '1.10000000',
+          evidence_class: 'PROVIDER_DEAL',
+          recorded_at: new Date('2026-11-25T00:00:01Z'),
+        },
+        {
+          id: 'ev-2',
+          order_id: 'order-1',
+          broker_connection_id: baseInput.brokerConnectionId,
+          provider_deal_id: null,
+          provider_order_id: null,
+          provider_position_id: 'pos-77',
+          quantity: '0.1000',
+          price: '1.20000000',
+          evidence_class: 'POSITION_FACTS',
+          recorded_at: new Date('2026-11-25T00:00:02Z'),
+        },
+      ]);
+      (dataSource as unknown as { query: jest.Mock }).query = query;
+
+      const evidence = await service.findFillEvidenceByOrderId('order-1');
+      expect(evidence).toHaveLength(2);
+      expect(evidence[0]!.providerDealId).toBe('deal-A');
+      expect(evidence[0]!.quantity).toBe('0.1000');
+      expect(evidence[1]!.providerDealId).toBeNull();
+      expect(evidence[1]!.evidenceClass).toBe('POSITION_FACTS');
+      expect(query).toHaveBeenCalledWith(
+        expect.stringContaining('ORDER BY recorded_at ASC, id ASC'),
+        ['order-1'],
+      );
     });
   });
 

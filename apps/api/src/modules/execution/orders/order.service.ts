@@ -10,6 +10,7 @@ import { DataSource, In, Repository } from 'typeorm';
 import * as crypto from 'crypto';
 import { Order } from './order.entity';
 import {
+  OrderFillEvidenceClass,
   OrderKind,
   OrderStatus,
   OrderTimeInForce,
@@ -61,7 +62,10 @@ export interface ApplyFillInput {
   providerOrderId?: string | null;
   /** Native broker POSITION id for MARKET fills (cTrader positionId). */
   providerPositionId?: string | null;
-  /** Native broker DEAL id that proved this fill (cTrader dealId) — provider evidence only. */
+  /** Native broker DEAL id that proved this fill (cTrader dealId) — provider
+   *  evidence only. Present → the fill is recorded in the immutable ledger
+   *  as PROVIDER_DEAL grade (replay-detectable). Absent → recorded with a
+   *  NULL deal id and its actual evidence class; never fabricated. */
   providerDealId?: string | null;
 }
 
@@ -325,15 +329,39 @@ export class OrderService {
 
   /**
    * Atomic fill application with EXACT decimal arithmetic (computed in
-   * PostgreSQL, never in JS floats).
+   * PostgreSQL, never in JS floats) — booked against the IMMUTABLE per-fill
+   * accounting evidence ledger (trading.order_fill_evidence, migration
+   * 1795564800000).
    *
-   * - Atomically increments filled_quantity.
-   * - Recomputes avg_fill_price as the volume-weighted average.
-   * - Moves status to PARTIALLY_FILLED or FILLED (terminal) exactly when the
-   *   requested quantity is reached, and stamps finalized_at on FILLED.
+   * - ONE transaction, all-or-nothing: the append-only ledger row and the
+   *   order-row update commit together or not at all (a refused fill leaves
+   *   no accounting event behind).
+   * - SELECT ... FOR UPDATE serializes concurrent fill accounting for the
+   *   same order; the ledger dedup read happens under that lock.
+   * - DEAL-GRADE REPLAY DETECTION: the fill's provider deal id is looked up
+   *   in the ledger — EVERY historical fill identifier is retained forever,
+   *   so a replayed delivery of an EARLIER partial fill (whose identifier
+   *   the order-row pointer has since overwritten) is an idempotent no-op,
+   *   never a second booking. This closes the confirmed partial-fill
+   *   accounting defect (0.10 + 0.10 + replayed 0.10 = 0.30).
+   * - LEGACY-COMPAT pointer check: fills booked before the ledger existed
+   *   (no ledger row — history was never fabricated) remain
+   *   replay-protected by comparing against the order-row provider_deal_id.
+   * - One native broker deal may be credited to at most ONE internal order:
+   *   a ledger row attributed to a different order fails closed
+   *   (ConflictException); the concurrent cross-order case is refused by the
+   *   partial unique index uq_order_fill_evidence_deal (23505 → typed
+   *   Conflict, transaction rolled back).
+   * - INCOMPLETE EVIDENCE: fills with no native deal id are recorded with
+   *   provider_deal_id NULL and their derived evidence_class — identifiers
+   *   are never fabricated; such rows carry no replay protection (the
+   *   honest limit of unidentified evidence).
+   * - Atomically increments filled_quantity; recomputes avg_fill_price as
+   *   the volume-weighted average; moves status to PARTIALLY_FILLED or
+   *   FILLED (terminal) exactly when the requested quantity is reached, and
+   *   stamps finalized_at on FILLED.
    * - FAIL-CLOSED on overfill: WHERE filled_quantity + $qty <= requested_quantity.
    * - Only fillable states (per OrderStateMachine.isFillable) may receive fills.
-   * - Optimistic concurrency: WHERE status = current status.
    */
   async applyFill(orderId: string, fill: ApplyFillInput): Promise<Order> {
     this.validateFill(fill);
@@ -344,106 +372,183 @@ export class OrderService {
       throw new ConflictException(`Order ${orderId} is not fillable (status: ${current.status})`);
     }
 
-    // Native-deal idempotency: the same broker deal can be delivered more
-    // than once (duplicate provider events, repeated or concurrent
-    // reconciliation). A fill already booked from that exact deal id must
-    // never be booked a second time — return the persisted row unchanged.
-    if (fill.providerDealId != null && current.providerDealId === fill.providerDealId) {
-      this.logger.log(
-        `Fill for order ${orderId} already booked from provider deal ${fill.providerDealId} — duplicate deal fill ignored`,
+    return this.dataSource.transaction(async (manager) => {
+      // 1. Lock the order row — serializes concurrent fill accounting for
+      //    THIS order and re-reads the authoritative in-transaction state.
+      const lockedRows: Record<string, unknown>[] = await manager.query(
+        `SELECT * FROM trading.orders WHERE id = $1 FOR UPDATE`,
+        [orderId],
       );
-      return current;
-    }
+      if (lockedRows.length === 0) throw new NotFoundException(`Order ${orderId} not found`);
+      const locked = this.hydrateOrderRow(lockedRows[0]!);
+      if (!OrderStateMachine.isFillable(locked.status)) {
+        throw new ConflictException(`Order ${orderId} is not fillable (status: ${locked.status})`);
+      }
 
-    // Deal ownership: one native broker deal may be credited to at most ONE
-    // internal order row. Refuse to book a fill whose deal id is already
-    // recorded on a different order of the same broker connection; the
-    // partial unique index (migration 1795220000000) backs this against
-    // concurrent writers at the database level.
-    if (fill.providerDealId != null && current.providerDealId !== fill.providerDealId) {
-      const owner = await this.findDealOwner(current.brokerConnectionId, fill.providerDealId);
-      if (owner && owner !== orderId) {
+      // 2. Ledger dedup — deal-grade replay detection. The immutable ledger
+      //    retains EVERY historical fill identifier, so this catches replays
+      //    of earlier partial fills whose identifier the order-row pointer
+      //    has since overwritten. A deal already booked on THIS order is an
+      //    idempotent no-op (duplicate provider event / repeated or
+      //    concurrent reconciliation); a deal attributed to a DIFFERENT
+      //    order of the same broker connection fails closed.
+      if (fill.providerDealId != null && fill.providerDealId !== '') {
+        const evidenceOwner: Record<string, unknown>[] = await manager.query(
+          `SELECT order_id FROM trading.order_fill_evidence
+           WHERE broker_connection_id = $1 AND provider_deal_id = $2
+           LIMIT 1`,
+          [locked.brokerConnectionId, fill.providerDealId],
+        );
+        if (evidenceOwner.length > 0) {
+          const ownerOrderId = evidenceOwner[0]!.order_id as string;
+          if (ownerOrderId === orderId) {
+            this.logger.log(
+              `Fill for order ${orderId} already booked from provider deal ` +
+                `${fill.providerDealId} (ledger replay) — duplicate deal fill ignored`,
+            );
+            return locked;
+          }
+          throw new ConflictException(
+            `Provider deal ${fill.providerDealId} is already attributed to order ` +
+              `${ownerOrderId} — a single broker deal cannot be credited to multiple ` +
+              'internal orders',
+          );
+        }
+      }
+
+      // 2b. Legacy row-pointer dedup — protects fills booked BEFORE the
+      //     ledger existed (the pre-migration population: the only durable
+      //     record of a booked deal is the order row's latest-deal pointer;
+      //     the ledger was never backfilled — no fabricated rows).
+      if (
+        fill.providerDealId != null &&
+        fill.providerDealId !== '' &&
+        locked.providerDealId === fill.providerDealId
+      ) {
+        this.logger.log(
+          `Fill for order ${orderId} already booked from provider deal ` +
+            `${fill.providerDealId} (order-row pointer) — duplicate deal fill ignored`,
+        );
+        return locked;
+      }
+
+      // 3. Append the immutable per-fill accounting evidence row — in the
+      //    SAME transaction as the quantity update (all-or-nothing). Fills
+      //    whose provider evidence carried no native deal id are recorded
+      //    with a NULL provider_deal_id and their derived evidence_class;
+      //    missing identifiers are never fabricated.
+      try {
+        await manager.query(
+          `INSERT INTO trading.order_fill_evidence
+             (id, order_id, broker_connection_id, provider_deal_id,
+              provider_order_id, provider_position_id, quantity, price,
+              evidence_class, recorded_at)
+           VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
+          [
+            orderId,
+            locked.brokerConnectionId,
+            fill.providerDealId ?? null,
+            fill.providerOrderId ?? null,
+            fill.providerPositionId ?? null,
+            fill.quantity,
+            fill.price,
+            this.deriveEvidenceClass(fill),
+          ],
+        );
+      } catch (err) {
+        // A concurrent writer booked the same native deal onto ANOTHER
+        // order row between the ledger read above and this INSERT — the
+        // partial unique index uq_order_fill_evidence_deal refuses it and
+        // the transaction rolls back (no partial accounting state).
+        if (fill.providerDealId != null && this.isUniqueConstraintViolation(err)) {
+          throw new ConflictException(
+            `Provider deal ${fill.providerDealId} was concurrently attributed to another order — ` +
+              'a single broker deal cannot be credited to multiple internal orders',
+          );
+        }
+        throw err;
+      }
+
+      // 4. The order-row update — exact-decimal PostgreSQL arithmetic,
+      //    overfill fail-closed, status CAS, latest-deal pointer refresh.
+      let result: unknown;
+      try {
+        result = await manager.query(
+          `UPDATE trading.orders
+           SET
+             filled_quantity = filled_quantity + $2::numeric,
+             avg_fill_price = CASE
+               WHEN filled_quantity = 0 THEN $3::numeric
+               ELSE (avg_fill_price * filled_quantity + $3::numeric * $2::numeric)
+                    / (filled_quantity + $2::numeric)
+             END,
+             status = CASE
+               WHEN filled_quantity + $2::numeric = requested_quantity THEN 'FILLED'
+               ELSE 'PARTIALLY_FILLED'
+             END,
+             provider_order_id = COALESCE($4, provider_order_id),
+             provider_position_id = COALESCE($6, provider_position_id),
+             provider_deal_id = COALESCE($7, provider_deal_id),
+             finalized_at = CASE
+               WHEN filled_quantity + $2::numeric = requested_quantity THEN NOW()
+               ELSE finalized_at
+             END,
+             updated_at = NOW()
+           WHERE id = $1
+             AND status = $5
+             AND filled_quantity + $2::numeric <= requested_quantity
+           RETURNING *`,
+          [
+            orderId,
+            fill.quantity,
+            fill.price,
+            fill.providerOrderId ?? null,
+            locked.status,
+            fill.providerPositionId ?? null,
+            fill.providerDealId ?? null,
+          ],
+        );
+      } catch (err) {
+        // A concurrent writer booked the same native deal onto another order
+        // row between the ledger read above and this UPDATE — the partial
+        // unique index on (broker_connection_id, provider_deal_id) refuses
+        // the pointer write.
+        if (fill.providerDealId != null && this.isUniqueConstraintViolation(err)) {
+          throw new ConflictException(
+            `Provider deal ${fill.providerDealId} was concurrently attributed to another order — ` +
+              'a single broker deal cannot be credited to multiple internal orders',
+          );
+        }
+        throw err;
+      }
+
+      // TypeORM's Postgres driver returns [rows, rowCount] for UPDATE queries
+      // (even with RETURNING *) — unwrap the nested rows array before use.
+      // INSERT/SELECT queries return the flat rows array directly.
+      const rows: Record<string, unknown>[] =
+        Array.isArray(result) && Array.isArray(result[0])
+          ? (result[0] as Record<string, unknown>[])
+          : (result as unknown as Record<string, unknown>[]);
+
+      if (rows.length === 0) {
+        // Either an overfill or a concurrent state change — both fail
+        // closed and roll back the transaction (including the evidence
+        // row: a refused fill leaves no accounting event behind).
+        const recheck = await this.findOrderById(orderId);
+        if (recheck && OrderStateMachine.isFillable(recheck.status)) {
+          // Overfill attempt: current filled + qty > requested.
+          throw new ConflictException(
+            `Fill of ${fill.quantity} exceeds remaining quantity for order ${orderId} ` +
+              `(filled ${recheck.filledQuantity} of ${recheck.requestedQuantity})`,
+          );
+        }
         throw new ConflictException(
-          `Provider deal ${fill.providerDealId} is already attributed to order ${owner} — ` +
-            'a single broker deal cannot be credited to multiple internal orders',
+          `Order ${orderId} state changed concurrently (status: ${recheck?.status ?? 'UNKNOWN'}) — retry`,
         );
       }
-    }
 
-    let result: unknown;
-    try {
-      result = await this.dataSource.query(
-        `UPDATE trading.orders
-         SET
-           filled_quantity = filled_quantity + $2::numeric,
-           avg_fill_price = CASE
-             WHEN filled_quantity = 0 THEN $3::numeric
-             ELSE (avg_fill_price * filled_quantity + $3::numeric * $2::numeric)
-                  / (filled_quantity + $2::numeric)
-           END,
-           status = CASE
-             WHEN filled_quantity + $2::numeric = requested_quantity THEN 'FILLED'
-             ELSE 'PARTIALLY_FILLED'
-           END,
-           provider_order_id = COALESCE($4, provider_order_id),
-           provider_position_id = COALESCE($6, provider_position_id),
-           provider_deal_id = COALESCE($7, provider_deal_id),
-           finalized_at = CASE
-             WHEN filled_quantity + $2::numeric = requested_quantity THEN NOW()
-             ELSE finalized_at
-           END,
-           updated_at = NOW()
-         WHERE id = $1
-           AND status = $5
-           AND filled_quantity + $2::numeric <= requested_quantity
-         RETURNING *`,
-        [
-          orderId,
-          fill.quantity,
-          fill.price,
-          fill.providerOrderId ?? null,
-          current.status,
-          fill.providerPositionId ?? null,
-          fill.providerDealId ?? null,
-        ],
-      );
-    } catch (err) {
-      // A concurrent writer booked the same native deal onto another order
-      // row between the ownership pre-check and this UPDATE — the partial
-      // unique index on (broker_connection_id, provider_deal_id) refuses it.
-      if (fill.providerDealId != null && this.isUniqueConstraintViolation(err)) {
-        throw new ConflictException(
-          `Provider deal ${fill.providerDealId} was concurrently attributed to another order — ` +
-            'a single broker deal cannot be credited to multiple internal orders',
-        );
-      }
-      throw err;
-    }
-
-    // TypeORM's Postgres driver returns [rows, rowCount] for UPDATE queries
-    // (even with RETURNING *) — unwrap the nested rows array before use.
-    // INSERT/SELECT queries return the flat rows array directly.
-    const rows: Record<string, unknown>[] =
-      Array.isArray(result) && Array.isArray(result[0])
-        ? (result[0] as Record<string, unknown>[])
-        : (result as unknown as Record<string, unknown>[]);
-
-    if (rows.length === 0) {
-      // Either a concurrent state change or an overfill — both fail closed.
-      const recheck = await this.findOrderById(orderId);
-      if (recheck && OrderStateMachine.isFillable(recheck.status)) {
-        // Overfill attempt: current filled + qty > requested.
-        throw new ConflictException(
-          `Fill of ${fill.quantity} exceeds remaining quantity for order ${orderId} ` +
-            `(filled ${recheck.filledQuantity} of ${recheck.requestedQuantity})`,
-        );
-      }
-      throw new ConflictException(
-        `Order ${orderId} state changed concurrently (status: ${recheck?.status ?? 'UNKNOWN'}) — retry`,
-      );
-    }
-
-    return this.hydrateOrderRow(rows[0]);
+      return this.hydrateOrderRow(rows[0]!);
+    });
   }
 
   // ─── Reads ────────────────────────────────────────────────────────────────
@@ -505,6 +610,51 @@ export class OrderService {
       order: { createdAt: 'DESC' },
       take: Math.min(Math.max(limit, 1), 200),
     });
+  }
+
+  /**
+   * Read-only view of the immutable per-fill accounting evidence ledger for
+   * an order, oldest first. Diagnostics and audit use this to re-derive the
+   * accounting invariant: orders.filled_quantity must equal
+   * SUM(order_fill_evidence.quantity) over the order's rows. The ledger is
+   * append-only — no service path may edit or delete these rows (the
+   * database trigger enforces it).
+   */
+  async findFillEvidenceByOrderId(orderId: string): Promise<
+    Array<{
+      id: string;
+      orderId: string;
+      brokerConnectionId: string;
+      providerDealId: string | null;
+      providerOrderId: string | null;
+      providerPositionId: string | null;
+      quantity: string;
+      price: string;
+      evidenceClass: string;
+      recordedAt: Date;
+    }>
+  > {
+    const rows: Record<string, unknown>[] = await this.dataSource.query(
+      `SELECT id, order_id, broker_connection_id, provider_deal_id,
+              provider_order_id, provider_position_id, quantity, price,
+              evidence_class, recorded_at
+       FROM trading.order_fill_evidence
+       WHERE order_id = $1
+       ORDER BY recorded_at ASC, id ASC`,
+      [orderId],
+    );
+    return rows.map((row) => ({
+      id: row.id as string,
+      orderId: row.order_id as string,
+      brokerConnectionId: row.broker_connection_id as string,
+      providerDealId: (row.provider_deal_id as string | null) ?? null,
+      providerOrderId: (row.provider_order_id as string | null) ?? null,
+      providerPositionId: (row.provider_position_id as string | null) ?? null,
+      quantity: String(row.quantity ?? '0'),
+      price: String(row.price ?? '0'),
+      evidenceClass: row.evidence_class as string,
+      recordedAt: row.recorded_at as Date,
+    }));
   }
 
   // ─── Internal helpers ─────────────────────────────────────────────────────
@@ -620,6 +770,28 @@ export class OrderService {
     if (!PRICE_PATTERN.test(fill.price ?? '') || parseFloat(fill.price) <= 0) {
       throw new BadRequestException('fill price must be a positive decimal string (scale ≤ 8)');
     }
+  }
+
+  /**
+   * Evidence-grade classification of a fill, derived ONLY from the
+   * identifiers the provider evidence actually carried — a classification
+   * of supplied facts, never a fabricated identifier:
+   * native deal id → PROVIDER_DEAL; else position id → POSITION_FACTS;
+   * else provider order id → PROVIDER_RESPONSE; else PROVIDER_ORDER_STATE.
+   * The DB CHECK ck_order_fill_evidence_class_consistent enforces the
+   * PROVIDER_DEAL ↔ provider_deal_id IS NOT NULL parity at rest.
+   */
+  private deriveEvidenceClass(fill: ApplyFillInput): OrderFillEvidenceClass {
+    if (fill.providerDealId != null && fill.providerDealId !== '') {
+      return OrderFillEvidenceClass.PROVIDER_DEAL;
+    }
+    if (fill.providerPositionId != null && fill.providerPositionId !== '') {
+      return OrderFillEvidenceClass.POSITION_FACTS;
+    }
+    if (fill.providerOrderId != null && fill.providerOrderId !== '') {
+      return OrderFillEvidenceClass.PROVIDER_RESPONSE;
+    }
+    return OrderFillEvidenceClass.PROVIDER_ORDER_STATE;
   }
 
   /**
