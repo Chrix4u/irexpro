@@ -93,6 +93,40 @@ export enum OrderStatus {
 /** All order statuses, in lifecycle (non-authoritative) order. */
 export const ORDER_STATUSES: readonly OrderStatus[] = Object.values(OrderStatus);
 
+/**
+ * OrderFillEvidenceClass — what kind of provider evidence authorized a
+ * booked fill (accounting-integrity correction 2026-11-25).
+ *
+ * Classifies the EVIDENCE GRADE of each per-fill ledger row in
+ * trading.order_fill_evidence. The class is derived strictly from the
+ * identifiers the provider evidence actually carried at fill time — it is
+ * a classification of supplied facts, never a fabricated identifier:
+ *
+ *   PROVIDER_DEAL      — the broker's native DEAL id proved the fill
+ *                        (deal-grade evidence; replay-detectable).
+ *   POSITION_FACTS     — position-level facts (e.g. a MARKET fill's
+ *                        positionId / trade-position volume and price)
+ *                        without a native deal id.
+ *   PROVIDER_RESPONSE  — fill quantity/price taken directly from the
+ *                        provider's order-response mapping (live dispatch
+ *                        acknowledgement), no deal/position identifier.
+ *   PROVIDER_ORDER_STATE — delta converged from provider-observed ORDER
+ *                        state (reconciliation), no identifiers at all.
+ *
+ * Rows with anything weaker than PROVIDER_DEAL carry a NULL provider_deal_id:
+ * incomplete evidence is recorded honestly, never completed by inference.
+ */
+export enum OrderFillEvidenceClass {
+  PROVIDER_DEAL = 'PROVIDER_DEAL',
+  POSITION_FACTS = 'POSITION_FACTS',
+  PROVIDER_RESPONSE = 'PROVIDER_RESPONSE',
+  PROVIDER_ORDER_STATE = 'PROVIDER_ORDER_STATE',
+}
+
+/** All fill-evidence classes (DB CHECK parity — see migration 1795564800000). */
+export const ORDER_FILL_EVIDENCE_CLASSES: readonly OrderFillEvidenceClass[] =
+  Object.values(OrderFillEvidenceClass);
+
 /** Direction re-export so order consumers need a single import surface. */
 export type OrderDirection = TradeDirection;
 
