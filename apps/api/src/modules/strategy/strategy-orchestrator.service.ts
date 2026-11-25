@@ -335,8 +335,7 @@ export class StrategyOrchestratorService {
               serverOriginVerified: hasServerM1Origin(candidate),
               demoModelRecognized: isServerPromotedExternalDemoModel(candidate),
               executionMode: session.executionMode,
-              connectionBindingMatches:
-                candidate.brokerConnectionId === session.brokerConnectionId,
+              connectionBindingMatches: candidate.brokerConnectionId === session.brokerConnectionId,
               accountAuthorizationActive: paperConnection?.authorizationStatus === 'ACTIVE',
               liveTradingEnabled: paperConnection?.liveTradingEnabled === true,
             },

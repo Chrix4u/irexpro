@@ -248,3 +248,27 @@ describe('shared frozen model identity registry', () => {
     }
   });
 });
+
+describe('offline DEMO route compatibility inventory', () => {
+  it.each([
+    'DEMO_CONTINUOUS_REVERSAL_EARLY_EVIDENCE',
+    'DEMO_ADVISORY_REVERSAL_EARLY_ENTRY_PILOT',
+    'DEMO_EXPERT_COUNTER_ENTRY_PILOT',
+    'DEMO_ALTERNATIVE_TIMING_TRIAL',
+    'HIGH_CONVICTION_RESCUE',
+    'M5_EARLY_TRANSITION_HANDOFF',
+    'EXTENSION_EXHAUSTION_DEMO_SCOUT',
+  ])('distinguishes recognized model identity from unqualified route %s', (route) => {
+    const candidate = brandServerM1Signal(
+      signal({
+        metadata: {
+          ...signal().metadata,
+          multimodel_execution_authority_path: route,
+        },
+      }),
+    );
+    expect(isServerPromotedExternalDemoModel(candidate)).toBe(true);
+    expect(evaluateM1PrimaryModelDecision(candidate)).toBe('PRIMARY_MODEL_NOT_ADMITTED');
+    expect(isStrictLiveM1PrimarySignal(candidate)).toBe(false);
+  });
+});
