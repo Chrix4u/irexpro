@@ -29,7 +29,7 @@ import { TradingNotReadyException } from '../../common/exceptions/trading-not-re
 import { BrokerConnection } from '../broker/entities/broker-connection.entity';
 import { BrokerConnectionStatus, BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { BrokerAuthorizationStatus } from '../broker/authorization/broker-authorization-status';
-import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
+import { BrokerAccountSnapshotService, SnapshotNotFreshError } from '../broker/services/broker-account-snapshot.service';
 import { BrokerAccountSnapshot } from '../broker/entities/broker-account-snapshot.entity';
 import { ExactDecimal } from '../../common/utils/exact-decimal';
 import { TradeCloseReason } from '../execution/entities/trade.entity';
@@ -1215,9 +1215,24 @@ export class TradingService {
     if (connection.accountType === BrokerMode.LIVE) {
       let snapshot: BrokerAccountSnapshot;
       try {
-        snapshot = await this.brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure(
-          connection.id,
-        );
+        try {
+          snapshot = await this.brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure(
+            connection.id,
+          );
+        } catch (snapshotError) {
+          // The normal observation cadence is longer than the LIVE freshness
+          // window. Refresh exactly once, only for missing/stale observations.
+          if (
+            !(snapshotError instanceof SnapshotNotFreshError) ||
+            !['SNAPSHOT_STALE', 'SNAPSHOT_MISSING'].includes(snapshotError.failure.code)
+          ) {
+            throw snapshotError;
+          }
+          await this.brokerService.observeAccountSnapshotNow(userId, connection.id);
+          snapshot = await this.brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure(
+            connection.id,
+          );
+        }
       } catch (err) {
         await this.auditService.log({
           actorUserId: userId,
