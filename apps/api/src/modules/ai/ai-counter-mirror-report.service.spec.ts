@@ -128,7 +128,6 @@ describe('owner-scoped virtual counter report', () => {
   });
 });
 
-
 describe('bounded counter report descriptor reader', () => {
   let dir: string;
   beforeEach(async () => {
