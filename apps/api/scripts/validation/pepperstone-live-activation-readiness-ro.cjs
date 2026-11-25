@@ -20,19 +20,16 @@ const output={artifact:'pepperstone-live-account-readiness-diagnostic-v1',
   realBrokerOrdersSent:false,accountIdsReturned:false,
   providerLiveCertification:'NOT_CERTIFIED',
   brokerAccountLinked:false,accountAuthorization:null,
-  automatedLiveEnabled:false,liveBrokerEquityUsd:null,
-  liveBrokerFreeMarginUsd:null,providerSnapshotAgeSeconds:null,
+  automatedLiveEnabled:false,providerSnapshotAgeSeconds:null,
   liveOpenPositions:null,latestReconciliation:null,
   activeAiSessions:null,activeDemoSessions:null,activeLiveSessions:null,
   warnings:[],demoValidated:false,
-  platformOAuthCredentialsConfigured:false,
   savedOAuthTradingScope:'NOT_INDEPENDENTLY_ATTESTED',
   canaryPlaceStopCloseReconcileEvidence:'NOT_FOUND',
   certifiedProviderReleasePending:false,certificationEvidenceRunId:null,
   blockers:[],recommendation:'NO_LIVE_EXECUTION_UNTIL_CERTIFIED'};
 (async()=>{
-  output.platformOAuthCredentialsConfigured=Boolean(env.CTRADER_CLIENT_ID&&env.CTRADER_CLIENT_SECRET);
-  if(!output.platformOAuthCredentialsConfigured)output.blockers.push('PLATFORM_OAUTH_APP_NOT_CONFIGURED');
+  if(!(env.CTRADER_CLIENT_ID&&env.CTRADER_CLIENT_SECRET))output.blockers.push('PLATFORM_OAUTH_APP_NOT_CONFIGURED');
   await db.connect();await db.query('BEGIN READ ONLY');
   try {
     const r=await db.query(`SELECT b.id,b.account_type,b.status,b.authorization_status,
@@ -52,8 +49,6 @@ const output={artifact:'pepperstone-live-account-readiness-diagnostic-v1',
       output.brokerAccountLinked=a.status==='CONNECTED'&&a.account_currency==='USD'&&a.has_provider_identity===true;
       output.accountAuthorization=a.authorization_status;
       output.automatedLiveEnabled=a.live_trading_enabled===true;
-      output.liveBrokerEquityUsd=a.equity==null?null:Number(a.equity).toFixed(2);
-      output.liveBrokerFreeMarginUsd=a.free_margin==null?null:Number(a.free_margin).toFixed(2);
       output.liveOpenPositions=a.open_positions_count;
       output.providerSnapshotAgeSeconds=a.synced_at?Math.round((Date.now()-new Date(a.synced_at).getTime())/1000):null;
       if(!output.brokerAccountLinked)output.blockers.push('LIVE_CONNECTION_IDENTITY_NOT_PROVEN');

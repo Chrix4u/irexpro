@@ -5,7 +5,7 @@ require('dotenv').config({path:path.resolve(__dirname,'../.env'),quiet:true});
 const {Client} = require('pg');
 (async()=>{
   const out=process.argv[2];
-  if (!out || !/^\/tmp\/irexpro-[a-zA-Z0-9-]+\.csv$/.test(out) || fs.existsSync(out))
+  if (!out || !/^\/tmp\/irexpro-[a-zA-Z0-9-]+\.csv$/.test(out))
     throw Error('Require a fresh private /tmp/irexpro-*.csv destination');
   const db=new Client({
     host:process.env.DB_HOST,port:Number(process.env.DB_PORT||5432),
