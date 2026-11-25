@@ -514,9 +514,12 @@ export class StateReconciliationService {
               linked.providerPositionId !== '0' &&
               linked.instrument === settled.instrument &&
               linked.direction === settled.direction &&
-              [linked.filledQuantity, linked.avgFillPrice, settled.lotSize, settled.fillPrice].every(
-                (value) => typeof value === 'string' && decimal.test(value),
-              ) &&
+              [
+                linked.filledQuantity,
+                linked.avgFillPrice,
+                settled.lotSize,
+                settled.fillPrice,
+              ].every((value) => typeof value === 'string' && decimal.test(value)) &&
               compareDecimal(linked.filledQuantity, settled.lotSize) === 0 &&
               compareDecimal(linked.avgFillPrice!, settled.fillPrice!) === 0
                 ? linked.providerPositionId
