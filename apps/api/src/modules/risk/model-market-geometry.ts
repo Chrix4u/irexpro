@@ -16,11 +16,7 @@ export function rebaseModelMarketGeometry(input: {
   const referenceEntry = ExactDecimal.tryParse(input.referenceEntry);
   const originalStop = ExactDecimal.tryParse(input.stopLoss);
   const originalTake = ExactDecimal.tryParse(input.takeProfit);
-  if (
-    !referenceEntry?.isPositive() ||
-    !originalStop?.isPositive() ||
-    !originalTake?.isPositive()
-  ) {
+  if (!referenceEntry?.isPositive() || !originalStop?.isPositive() || !originalTake?.isPositive()) {
     return null;
   }
   const stopDistance = referenceEntry.sub(originalStop).abs();
