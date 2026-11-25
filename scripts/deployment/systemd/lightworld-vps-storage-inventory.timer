@@ -1,0 +1,12 @@
+[Unit]
+Description=Nightly low-I/O directory inventory for shared Lightworld VPS
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 UTC
+RandomizedDelaySec=30min
+AccuracySec=5min
+Persistent=false
+Unit=lightworld-vps-storage-inventory.service
+
+[Install]
+WantedBy=timers.target

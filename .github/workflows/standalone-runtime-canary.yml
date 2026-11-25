@@ -1,0 +1,136 @@
+name: iRexPro Isolated Standalone Runtime Canary
+
+on:
+  push:
+    branches: [ops/github-first-vps-storage-20261121]
+    paths:
+      - '.github/workflows/standalone-runtime-canary.yml'
+      - 'scripts/deployment/package-standalone-runtime.sh'
+      - 'scripts/deployment/prepare-standalone-build.py'
+      - 'scripts/deployment/inspect-standalone-runtime.py'
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: 'Exact 40-character trading source SHA (default is active demo baseline)'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: irexpro-standalone-runtime-canary-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  canary:
+    name: Build and smoke-test source-light Next/Nest runtime
+    if: github.repository == 'Chrix4u/irexpro'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha || '652a9858deedcfee1b0240a98440f109000aec3b' }}
+      NEXT_TELEMETRY_DISABLED: '1'
+      NEXT_PUBLIC_API_BASE_URL: https://irexpro.lightworldtech.com/api/v1
+      NEXT_PUBLIC_APP_ENV: staging
+
+    steps:
+      - name: Checkout exact deployed trading source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+
+      - name: Checkout verified build tools outside candidate source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          path: .builder-tools
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: '10.34.5'
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Compile API and standalone web/admin on GitHub
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          pnpm install --frozen-lockfile
+          python3 .builder-tools/scripts/deployment/prepare-standalone-build.py .
+          pnpm --filter @irexpro/api build
+          NEXT_PUBLIC_APP_URL=https://irexpro.lightworldtech.com pnpm --filter @irexpro/web build
+          NEXT_PUBLIC_APP_URL=https://irexproadmin.lightworldtech.com pnpm --filter @irexpro/admin build
+
+      - name: Package runtime with its production dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export RUNTIME_BUNDLE_DEST="$RUNNER_TEMP/irexpro-standalone-runtime"
+          bash .builder-tools/scripts/deployment/package-standalone-runtime.sh
+          tar -czf "$RUNNER_TEMP/irexpro-standalone-runtime.tar.gz" -C "$RUNTIME_BUNDLE_DEST" .
+          (cd "$RUNNER_TEMP" && sha256sum irexpro-standalone-runtime.tar.gz > irexpro-standalone-runtime.tar.gz.sha256)
+          python3 .builder-tools/scripts/deployment/inspect-standalone-runtime.py "$RUNNER_TEMP/irexpro-standalone-runtime.tar.gz" "$SOURCE_SHA"
+
+      - name: Test extracted web/admin without repository checkout
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          canary="$RUNNER_TEMP/irexpro-standalone-smoke"
+          mkdir -p "$canary"
+          tar -xzf "$RUNNER_TEMP/irexpro-standalone-runtime.tar.gz" -C "$canary"
+          test -d "$canary/api/node_modules/@nestjs/core"
+          (cd "$canary/api" && node -e 'for(const x of ["@nestjs/core","@nestjs/common","typeorm","pg","argon2"]) require(x); console.log("Nest, database and native argon2 dependencies OK")')
+          test -f "$canary/apps/api/scripts/audit-pepperstone-main-counter-virtual.cjs"
+          node --check "$canary/apps/api/scripts/audit-pepperstone-main-counter-virtual.cjs"
+          test -f "$canary/services/ai-engine/app/main.py"
+          python3 - <<'PYTHON'
+          import ast, pathlib, os
+          for src in pathlib.Path(os.environ['RUNNER_TEMP']).joinpath('irexpro-standalone-smoke/services/ai-engine').rglob('*.py'):
+              ast.parse(src.read_text(encoding="utf-8-sig"), filename=str(src))
+          print('Python AI source syntax checked without starting schedulers')
+          PYTHON
+          (
+            cd "$canary/web/apps/web"
+            HOSTNAME=127.0.0.1 PORT=4305 node server.js >"$RUNNER_TEMP/irexpro-canary-web.log" 2>&1
+          ) &
+          web_pid=$!
+          (
+            cd "$canary/admin/apps/admin"
+            HOSTNAME=127.0.0.1 PORT=4306 node server.js >"$RUNNER_TEMP/irexpro-canary-admin.log" 2>&1
+          ) &
+          admin_pid=$!
+          trap 'kill "$web_pid" "$admin_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            w="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:4305/login || true)"
+            a="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:4306/ || true)"
+            if [[ "$w" == 200 && "$a" =~ ^(200|302|303|307|308)$ ]]; then
+              echo "Source-light web/admin canary passed: web=$w admin=$a"
+              break
+            fi
+            if (( attempt == 30 )); then
+              cat "$RUNNER_TEMP/irexpro-canary-web.log" "$RUNNER_TEMP/irexpro-canary-admin.log"
+              echo "Source-light canary HTTP smoke failed: web=$w admin=$a" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+
+      - name: Upload source-light runtime artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: irexpro-standalone-${{ env.SOURCE_SHA }}
+          path: |
+            ${{ runner.temp }}/irexpro-standalone-runtime.tar.gz
+            ${{ runner.temp }}/irexpro-standalone-runtime.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
