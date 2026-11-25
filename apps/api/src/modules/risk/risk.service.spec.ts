@@ -1598,6 +1598,80 @@ describe('RiskService', () => {
       }
     });
 
+    // Offline parity characterization. These synthetic fixtures deliberately
+    // retain the current LIVE risk gate; they never submit a broker order.
+    it.each(['1.10006', '1.10014'])(
+      'DEMO allocation-aware geometry preserves a five-pip stop at quote %s',
+      async (quote) => {
+        orderGeometry.resolveOrderGeometry.mockResolvedValue({
+          contractSize: ExactDecimal.parse('100000'),
+          freshQuote: ExactDecimal.parse(quote),
+          quoteRef: { source: 'BROKER_TEST' },
+        });
+        const result = await service.validateProposedTrade(
+          'user-1',
+          validTrade({
+            direction: 'SELL',
+            entryPrice: '0',
+            requestedLotSize: '0.05',
+            stopLoss: '1.10050',
+            takeProfit: '1.09920',
+            allocationAwarePaperSizing: true,
+            paperMarketReferenceEntryPrice: '1.10000',
+          }),
+        );
+        expect(result.decision).toBe('APPROVED');
+        if (result.decision !== 'APPROVED') throw new Error(result.rejectionReason);
+        expect(
+          ExactDecimal.parse(result.validatedOrder.stopLoss)
+            .sub(ExactDecimal.parse(quote))
+            .toString(),
+        ).toBe('0.0005');
+        expect(
+          ExactDecimal.parse(quote)
+            .sub(ExactDecimal.parse(result.validatedOrder.takeProfit))
+            .toString(),
+        ).toBe('0.0008');
+      },
+    );
+
+    it.each(['1.10006', '1.10014'])(
+      'LIVE absolute market geometry rejects a shortened stop at quote %s',
+      async (quote) => {
+        brokerService.findConnectionById.mockResolvedValue(
+          defaultConnection({ accountType: 'LIVE' }),
+        );
+        sessionRepo.findOne.mockResolvedValue(
+          defaultSession({ executionMode: ExecutionMode.FULL_AUTO }),
+        );
+        sessionResolution.resolveActiveSessionAuthority.mockResolvedValue({
+          sessionId: 'session-1',
+          sessionGeneration: 1,
+          executionMode: ExecutionMode.FULL_AUTO,
+          brokerConnectionId: 'conn-1',
+        });
+        orderGeometry.resolveOrderGeometry.mockResolvedValue({
+          contractSize: ExactDecimal.parse('100000'),
+          freshQuote: ExactDecimal.parse(quote),
+          quoteRef: { price: quote, direction: 'SELL', source: 'broker-current-price' },
+        });
+        const result = await service.validateProposedTrade(
+          'user-1',
+          validTrade({
+            direction: 'SELL',
+            entryPrice: '0',
+            requestedLotSize: '0.05',
+            stopLoss: '1.10050',
+            takeProfit: '1.09920',
+            executionMode: ExecutionMode.FULL_AUTO,
+          }),
+        );
+        expect(result.decision).toBe('REJECTED');
+        if (result.decision !== 'REJECTED') throw new Error('Expected a risk rejection');
+        expect(result.rejectionCode).toBe(RiskRejectionCode.INVALID_SL_DISTANCE);
+      },
+    );
+
     it('LIVE MARKET entry without a fresh quote fails CLOSED with a typed code', async () => {
       brokerService.findConnectionById.mockResolvedValue(
         defaultConnection({ accountType: 'LIVE' }),
