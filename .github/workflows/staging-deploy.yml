@@ -116,6 +116,10 @@ jobs:
           export PUBLIC_WEB_URL='https://irexpro.lightworldtech.com/login'
           export PUBLIC_ADMIN_URL='https://irexproadmin.lightworldtech.com/'
 
+          # Shared host policy: refuse legacy on-host builds when capacity is held.
+          test -x /usr/local/sbin/lightworld-vps-capacity-check
+          /usr/local/sbin/lightworld-vps-capacity-check build
+
           cd "$STAGING_ROOT"
           test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
           git fetch --quiet origin main
