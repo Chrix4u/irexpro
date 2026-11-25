@@ -97,4 +97,3 @@ statement export (424 closed deals, 2026-11-10 → 2026-11-23, deposit
   221 of 251 recorded execution decisions) lives in the application database
   and must be certified from `trade_intents` / `m1_tactical_decisions`
   records; it is deliberately not inferred or fabricated offline.
-
