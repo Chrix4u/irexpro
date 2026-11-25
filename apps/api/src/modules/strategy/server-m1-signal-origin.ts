@@ -1,6 +1,37 @@
 import type { AiSignalCandidate } from './interfaces/strategy.interface';
 
 /**
+ * Frozen identities shared by the signal pipeline. Recognizing an identity
+ * is not an execution grant; each account's existing certification boundary
+ * still applies. Historical DEMO-only model versions remain recognized for
+ * DEMO compatibility, not automatically production-qualified.
+ */
+export const PRIMARY_M1_MODEL_IDENTITY = Object.freeze({
+  strategyCode: 'external-irexpro-multimodel-ensemble',
+  modelVersion: 'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
+  timeframe: 'M1',
+} as const);
+
+function modelIdentity(
+  candidate: Pick<AiSignalCandidate, 'strategyCode' | 'modelVersion' | 'timeframe'>,
+): string {
+  return `${candidate.strategyCode ?? ''}|${candidate.modelVersion ?? ''}|${candidate.timeframe ?? ''}`;
+}
+
+const PRIMARY_M1_MODEL_KEY = modelIdentity(PRIMARY_M1_MODEL_IDENTITY);
+
+const PROMOTED_EXTERNAL_DEMO_MODELS = new Set([
+  'external-irexpro-m1-tactical|external-provider/irexpro-m1-tactical/m1-tactical-v1|M1',
+  'external-irexpro-m1-tactical|external-provider/irexpro-m1-tactical/m1-tactical-v2-m5-lifecycle|M1',
+  PRIMARY_M1_MODEL_KEY,
+]);
+
+export function isServerPromotedExternalDemoModel(candidate: AiSignalCandidate): boolean {
+  return PROMOTED_EXTERNAL_DEMO_MODELS.has(modelIdentity(candidate));
+}
+
+
+/**
  * Unserializable in-process source proof. A Python relay, external
  * HTTP caller, or client-supplied metadata cannot forge this Symbol over
  * JSON. Only the local M1TacticalSchedulerService may brand a candidate,
@@ -59,9 +90,9 @@ export function evaluateM1PrimaryModelDecision(
 ): M1PrimaryModelDecision {
   const m = candidate.metadata;
   if (
-    candidate.strategyCode !== 'external-irexpro-multimodel-ensemble' ||
-    candidate.modelVersion !== 'external-provider/irexpro-multimodel-ensemble-v1/demo-v1' ||
-    candidate.timeframe !== 'M1' ||
+    candidate.strategyCode !== PRIMARY_M1_MODEL_IDENTITY.strategyCode ||
+    candidate.modelVersion !== PRIMARY_M1_MODEL_IDENTITY.modelVersion ||
+    candidate.timeframe !== PRIMARY_M1_MODEL_IDENTITY.timeframe ||
     m?.signal_source !== 'EXTERNAL_PROVIDER' ||
     m?.external_provider_paper_only !== true
   ) {

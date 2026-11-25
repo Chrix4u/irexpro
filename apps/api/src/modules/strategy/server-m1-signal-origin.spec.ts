@@ -2,6 +2,8 @@ import {
   brandServerM1Signal,
   evaluateM1PrimaryModelDecision,
   hasServerM1Origin,
+  isServerPromotedExternalDemoModel,
+  PRIMARY_M1_MODEL_IDENTITY,
   isStrictLiveM1PrimarySignal,
 } from './server-m1-signal-origin';
 import type { AiSignalCandidate } from './interfaces/strategy.interface';
@@ -211,5 +213,38 @@ describe('account-independent primary-model decision classification', () => {
     );
     expect(evaluateM1PrimaryModelDecision(candidate)).toBe(reason);
     expect(isStrictLiveM1PrimarySignal(candidate)).toBe(false);
+  });
+});
+
+describe('shared frozen model identity registry', () => {
+  it('recognizes the same primary identity without granting execution authority', () => {
+    const candidate = signal({ ...PRIMARY_M1_MODEL_IDENTITY });
+    expect(isServerPromotedExternalDemoModel(candidate)).toBe(true);
+    expect(evaluateM1PrimaryModelDecision(candidate)).toBe('QUALIFIED');
+    expect(isStrictLiveM1PrimarySignal(candidate)).toBe(false);
+    expect(isStrictLiveM1PrimarySignal(brandServerM1Signal(candidate))).toBe(true);
+  });
+
+  it.each(['m1-tactical-v1', 'm1-tactical-v2-m5-lifecycle'])(
+    'preserves historical DEMO model identity %s without LIVE promotion',
+    (version) => {
+      const candidate = brandServerM1Signal(
+        signal({
+          strategyCode: 'external-irexpro-m1-tactical',
+          modelVersion: `external-provider/irexpro-m1-tactical/${version}`,
+        }),
+      );
+      expect(isServerPromotedExternalDemoModel(candidate)).toBe(true);
+      expect(evaluateM1PrimaryModelDecision(candidate)).toBe('MODEL_IDENTITY_MISMATCH');
+      expect(isStrictLiveM1PrimarySignal(candidate)).toBe(false);
+    },
+  );
+
+  it('rejects unrecognized versions and timeframes in both existing boundaries', () => {
+    for (const fields of [{ modelVersion: 'unknown' }, { timeframe: 'M5' }]) {
+      const candidate = brandServerM1Signal(signal(fields));
+      expect(isServerPromotedExternalDemoModel(candidate)).toBe(false);
+      expect(isStrictLiveM1PrimarySignal(candidate)).toBe(false);
+    }
   });
 });
