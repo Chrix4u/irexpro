@@ -30,7 +30,6 @@ export function isServerPromotedExternalDemoModel(candidate: AiSignalCandidate):
   return PROMOTED_EXTERNAL_DEMO_MODELS.has(modelIdentity(candidate));
 }
 
-
 /**
  * Unserializable in-process source proof. A Python relay, external
  * HTTP caller, or client-supplied metadata cannot forge this Symbol over
