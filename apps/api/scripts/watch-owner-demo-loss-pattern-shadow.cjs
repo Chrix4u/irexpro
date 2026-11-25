@@ -1,5 +1,5 @@
 'use strict';
-const {readBoundedText}=require('./bounded-research-file.cjs');
+const {readBoundedText,createPrivateOnce}=require('./bounded-research-file.cjs');
 /**
  * Owner Pepperstone USD DEMO only. Forward-enrolls OPEN positions <=90s from
  * broker opening, freezes pre-entry features, and later joins settled outcomes.
@@ -381,25 +381,26 @@ function loadActivation(root,owner,at=Date.now(),source=BASELINE_SOURCE){
  fs.mkdirSync(root,{recursive:true,mode:0o700});
  const baselineFile=path.join(root,'frozen-baseline.json');
  const markerFile=path.join(root,'activation.json');
- let marker;
- if(!fs.existsSync(markerFile)){
-  const raw=fs.readFileSync(source,'utf8'),baseline=JSON.parse(raw);
+ const maxBaselineBytes=32*1024*1024;
+ const priorMarker=readBoundedText(markerFile,1024*1024,'INVALID_SHADOW_MARKER',true);
+ if(priorMarker===null){
+  const raw=readBoundedText(source,maxBaselineBytes,'INVALID_SHADOW_BASELINE'),baseline=JSON.parse(raw);
   if(!Array.isArray(baseline.records)||baseline.records.length<10||
      baseline.records.some(x=>date(x.openedAt)>=at)||
      baseline.researchOnly!==true||baseline.modifiesExecution!==false)
    throw Error('INVALID_OR_FUTURE_CONTAMINATED_BASELINE');
   const hash=sha(raw),ownerFingerprint=sha(owner);
-  if(fs.existsSync(baselineFile)){
-   if(sha(fs.readFileSync(baselineFile,'utf8'))!==hash)
-    throw Error('BASELINE_FREEZE_COLLISION');
-  }else fs.writeFileSync(baselineFile,raw,{flag:'wx',mode:0o600});
-  marker={artifact:JOURNAL_SOURCE,activatedAt:iso(at),
+  createPrivateOnce(baselineFile,raw);
+  if(sha(readBoundedText(baselineFile,maxBaselineBytes,'INVALID_SHADOW_BASELINE'))!==hash)
+   throw Error('BASELINE_FREEZE_COLLISION');
+  const marker={artifact:JOURNAL_SOURCE,activatedAt:iso(at),
    baselineSha256:hash,ownerFingerprint,
    frozenRoutes:ROUTES,hypothesisIds:HYPOTHESES.map(x=>x.id),
    riskAndExecutionAuthority:'NONE'};
-  fs.writeFileSync(markerFile,JSON.stringify(marker,null,2),{flag:'wx',mode:0o600});
- }else marker=JSON.parse(fs.readFileSync(markerFile,'utf8'));
- const raw=fs.readFileSync(baselineFile,'utf8');
+  createPrivateOnce(markerFile,JSON.stringify(marker,null,2));
+ }
+ const marker=JSON.parse(readBoundedText(markerFile,1024*1024,'INVALID_SHADOW_MARKER'));
+ const raw=readBoundedText(baselineFile,maxBaselineBytes,'INVALID_SHADOW_BASELINE');
  if(marker.artifact!==JOURNAL_SOURCE||marker.ownerFingerprint!==sha(owner)||
     sha(raw)!==marker.baselineSha256||!(date(marker.activatedAt)<=at)||
     JSON.stringify(marker.hypothesisIds)!==JSON.stringify(HYPOTHESES.map(x=>x.id)))
