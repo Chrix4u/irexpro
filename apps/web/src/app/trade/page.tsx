@@ -31,6 +31,7 @@ import type { StrategyLossBrakeOwnerStatus } from "@/components/trading/Strategy
 import { OwnerDemoLossClusterNotice } from "@/components/trading/OwnerDemoLossClusterNotice";
 import { AiTraderLoading } from "./ai-trader-loading";
 import { api } from "@/lib/api";
+import { readBrokerPreference, rememberBrokerPreference, resolveWorkspaceBrokerId } from "@/lib/trader-broker-preference";
 import { formatAgeSeconds } from "@/lib/duration";
 import { mapApiError } from "@/lib/error-mapping";
 import { loadLiveAccountPositions } from "@/lib/live-account";
@@ -1858,6 +1859,7 @@ export default function AiTradingPage() {
   const [selectedBrokerId, setSelectedBrokerId] = useState<string>("");
   // Ensure older in-flight polling cannot overwrite the current broker.
   const selectedBrokerIdRef = useRef<string>("");
+  const brokerPreferenceRef = useRef<{ userId: string; brokerId: string | null } | null>(null);
   const [allocationAmount, setAllocationAmount] = useState("");
   const [loading, setLoading] = useState(true);
   const [savingAllocation, setSavingAllocation] = useState(false);
@@ -1951,7 +1953,7 @@ export default function AiTradingPage() {
     }) &&
     // Old session risk must never be attributed to another selected account.
     endedRiskViolationMatchesBroker({
-      selectedBrokerConnectionId: selectedBrokerId || terminal?.primaryBroker?.id || null,
+      selectedBrokerConnectionId: selectedBrokerId || null,
       endedSession: terminal?.lastEndedSession ?? null,
       violation:
         terminal?.risk?.latestRiskSuspensionViolation ??
@@ -2050,7 +2052,6 @@ export default function AiTradingPage() {
     () =>
       terminal?.sessionBroker ??
       terminal?.brokers.find((broker) => broker.id === selectedBrokerId) ??
-      terminal?.primaryBroker ??
       null,
     [terminal, selectedBrokerId],
   );
@@ -2218,18 +2219,24 @@ export default function AiTradingPage() {
         // telemetry, model status, historical reports, or live charts.
         // Start it immediately after the broker is known and independently
         // release the skeleton when that verified response settles.
-        const brokerId =
-          status.sessionBroker?.id ||
-          selectedBrokerIdRef.current ||
-          status.primaryBroker?.id ||
-          "";
-        if (status.sessionBroker?.id) {
-          selectedBrokerIdRef.current = status.sessionBroker.id;
-        } else if (!selectedBrokerIdRef.current) {
-          selectedBrokerIdRef.current = brokerId;
+        if (brokerPreferenceRef.current?.userId !== user.id) {
+          brokerPreferenceRef.current = {
+            userId: user.id,
+            brokerId: readBrokerPreference(user.id),
+          };
         }
+        const brokerId = resolveWorkspaceBrokerId(status, brokerPreferenceRef.current.brokerId);
+        if (selectedBrokerIdRef.current !== brokerId) {
+          setAllocation(null);
+          setAllocationAmount("");
+          setExecution(null);
+          setExecutionScopedBrokerId(null);
+          setRealised24hReport(null);
+          setPendingAutomationAction(null);
+        }
+        selectedBrokerIdRef.current = brokerId;
+        setSelectedBrokerId(brokerId);
         if (brokerId) {
-          setSelectedBrokerId(selectedBrokerIdRef.current);
           void api.getCapitalAllocation(brokerId)
             .then((nextAllocation) => {
               if (selectedBrokerIdRef.current === brokerId) {
@@ -2249,8 +2256,9 @@ export default function AiTradingPage() {
             .finally(() => {
               if (showSpinner) setLoading(false);
             });
-        } else if (!selectedBrokerIdRef.current) {
+        } else {
           setAllocation(null);
+          setAllocationAmount("");
           if (showSpinner) setLoading(false);
         }
 
@@ -2352,7 +2360,7 @@ export default function AiTradingPage() {
           : Promise.resolve(null);
         const [executionResult, positionsResult, realisedReportResult] =
           await Promise.allSettled([
-            loadTraderExecutionSnapshot(brokerId || undefined),
+            brokerId ? loadTraderExecutionSnapshot(brokerId) : Promise.resolve(null),
             loadLiveAccountPositions(),
             realisedReportPromise,
           ]);
@@ -2371,7 +2379,7 @@ export default function AiTradingPage() {
         // Secondary read failures must never erase the last authoritative UI
         // snapshot. Keep the previous data on screen and let the existing
         // polling loops retry automatically.
-        if (snapshot) {
+        if (snapshot && selectedBrokerIdRef.current === brokerId) {
           setExecution(snapshot);
           setExecutionScopedBrokerId(brokerId || null);
         }
@@ -2379,7 +2387,7 @@ export default function AiTradingPage() {
           setLivePositions(positions);
           setPositionsLoaded(true);
         }
-        if (brokerId && realisedReport) {
+        if (brokerId && realisedReport && selectedBrokerIdRef.current === brokerId) {
           setRealised24hReport({
             brokerConnectionId: brokerId,
             summary: realisedReport.summary,
@@ -2388,7 +2396,7 @@ export default function AiTradingPage() {
           setRealised24hReport(null);
         }
 
-        if (snapshot && positions) {
+        if (snapshot && positions && selectedBrokerIdRef.current === brokerId) {
           emitActivityToasts(positions, snapshot);
         }
 
@@ -2792,6 +2800,14 @@ export default function AiTradingPage() {
   }, [pendingAutomationAction, togglingAutomation]);
 
   async function handleBrokerChange(nextId: string) {
+    if (!user || !terminal?.sessionStateKnown || terminal.session ||
+        !terminal.brokers.some((broker) => broker.id === nextId)) return;
+    brokerPreferenceRef.current = { userId: user.id, brokerId: nextId };
+    rememberBrokerPreference(user.id, nextId);
+    setPendingAutomationAction(null);
+    setExecution(null);
+    setExecutionScopedBrokerId(null);
+    setRealised24hReport(null);
     selectedBrokerIdRef.current = nextId;
     setSelectedBrokerId(nextId);
     setAllocation(null);
@@ -3669,8 +3685,9 @@ export default function AiTradingPage() {
                         void handleBrokerChange(event.target.value)
                       }
                       aria-label="Broker account"
-                      disabled={automationOn}
+                      disabled={automationOn || automationSuspended || !terminal.sessionStateKnown || Boolean(terminal.session)}
                     >
+                      <option value="" disabled>Select a broker account</option>
                       {terminal.brokers.map((broker) => (
                         <option key={broker.id} value={broker.id}>
                           {broker.displayName || broker.brokerName} ·{" "}
