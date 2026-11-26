@@ -19,3 +19,14 @@ Run node --test apps/api/scripts/research/m1-decision-evidence-coverage.test.cjs
 ## Checkpoint
 
 PR #834 initially passed eleven executed CI checks (full API lint skipped) at 6e2e6558. Added offline reason-specific margin helper, five synthetic tests, and CI step; updated candidate CI pending. No runtime changes or database queries performed. Next: independently verify the updated candidate, then obtain authorized deidentified decision and outcome evidence for descriptive coverage review. The scalar score is deliberately null until supported by calibration; preserve all existing risk and execution rules.
+
+
+## Independent review handoff
+
+The historical feature completeness inventory (`m1-feature-coverage.cjs`) is now part of this research branch, with synthetic regression tests and an API CI step. It counts valid, missing, invalid and unverified observations without imputing values or granting qualification.
+
+The next review is an evidence audit, not a model deployment. Verify original decision linkage and chronology, policy version, proposed side, and the availability of direction quality, confidence, composite score, score edge, momentum, alignment and the exact rejection reason. Keep actual settled DEMO observations distinct from unfilled candidates and simulated outcomes. Report aggregate completeness, missingness, descriptive distributions and uncertainty; do not infer execution permission from any group or use after-entry features as inputs. Review selection bias, correlated episodes, route differences and the limitations of the existing confidence heuristic. Document any unsupported conclusion explicitly.
+
+Use only separately authorized deidentified research exports in an isolated environment; do not publish account-specific observations, private reports, credentials or identifiers in the public repository. No broker calls, production database access, runtime wiring, threshold changes, model promotion, live orders or service restarts are part of this handoff.
+
+Checkpoint: at candidate commit `8a8fcf47`, API tests and build completed successfully; final gate and static analysis were still in progress when checked. Updated documentation will receive its own CI result. Actual historical feature extraction and independent calibration remain incomplete.
