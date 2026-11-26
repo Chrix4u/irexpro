@@ -32,6 +32,8 @@ jobs:
       PGDATABASE: irexpro_path_coverage_fixture
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
       - name: Run diagnostic against isolated synthetic database
         run: |
           set -euo pipefail
