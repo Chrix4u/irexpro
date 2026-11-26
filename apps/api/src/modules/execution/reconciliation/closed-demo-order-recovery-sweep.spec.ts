@@ -191,7 +191,7 @@ describe('selectAgedDemoCloseRecoveryCandidates', () => {
   });
 
   it('rotates fairly so unresolved rows cannot starve the rest of the backlog', () => {
-    const ids = Array.from({ length: 30 }, (_, i) => `o${String(i).padStart(2, '0')}`);
+    const ids = Array.from({ length: 5 }, (_, i) => `o${String(i).padStart(2, '0')}`);
     const orders = ids.map((id) => stranded(id, `t-${id}`, new Date('2026-11-10T06:00:00Z')));
     const first = selectAgedDemoCloseRecoveryCandidates(orders, now, undefined).map((o) => o.id);
     const second = selectAgedDemoCloseRecoveryCandidates(orders, now, first[first.length - 1]).map(
@@ -200,22 +200,18 @@ describe('selectAgedDemoCloseRecoveryCandidates', () => {
     const third = selectAgedDemoCloseRecoveryCandidates(orders, now, second[second.length - 1]).map(
       (o) => o.id,
     );
-    // Batch 1: the first 25 in deterministic id order.
-    expect(first).toEqual(ids.slice(0, 25));
-    // Batch 2: the remaining 5 then wraps to the head to fill the budget —
-    // the unresolved head rows are retried only after the tail rows got
-    // their chance (no starvation).
-    expect(second).toEqual([...ids.slice(25), ...ids.slice(0, 20)]);
-    // Batch 3: continues from where batch 2 ended.
-    expect(third).toEqual([...ids.slice(20), ...ids.slice(0, 15)]);
+    expect(first).toEqual(ids.slice(0, 2));
+    expect(second).toEqual(ids.slice(2, 4));
+    // The final unvisited row is reached before wrapping to the head.
+    expect(third).toEqual([...ids.slice(4), ...ids.slice(0, 1)]);
   });
 
   it('bounds the batch to the documented budget', () => {
-    expect(AGED_DEMO_CLOSE_RECOVERY_BATCH).toBe(25);
+    expect(AGED_DEMO_CLOSE_RECOVERY_BATCH).toBe(2);
     const many = Array.from({ length: 60 }, (_, i) =>
       stranded(`o${String(i).padStart(3, '0')}`, `t${i}`, new Date('2026-11-10T06:00:00Z')),
     );
-    expect(selectAgedDemoCloseRecoveryCandidates(many, now, undefined)).toHaveLength(25);
+    expect(selectAgedDemoCloseRecoveryCandidates(many, now, undefined)).toHaveLength(2);
   });
 
   it('requires submittedAt/createdAt provenance and a finite asOf', () => {

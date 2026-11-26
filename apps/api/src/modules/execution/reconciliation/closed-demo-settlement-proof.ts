@@ -101,14 +101,20 @@ export function proveUniqueCtraderDemoSettlement(
     };
   const deal = samePosition[0];
   const normalize = (symbol: string) => symbol.replace(/[^a-z]/gi, '').toUpperCase();
-  if (
-    normalize(deal.instrument) !== normalize(trade.instrument) ||
-    !Number.isFinite(deal.closedAt.getTime()) ||
-    deal.closedAt.getTime() < trade.openedAt.getTime() ||
-    deal.closedAt.getTime() > now.getTime() + 60_000 ||
-    Math.abs(deal.closedAt.getTime() - trade.closedAt.getTime()) > 180_000
-  ) {
-    return { matched: false, reason: 'INSTRUMENT_OR_CLOSE_TIME_MISMATCH' };
+  if (normalize(deal.instrument) !== normalize(trade.instrument)) {
+    return { matched: false, reason: 'INSTRUMENT_MISMATCH' };
+  }
+  if (!Number.isFinite(deal.closedAt.getTime())) {
+    return { matched: false, reason: 'INVALID_PROVIDER_CLOSE_TIME' };
+  }
+  if (deal.closedAt.getTime() < trade.openedAt.getTime()) {
+    return { matched: false, reason: 'PROVIDER_CLOSE_BEFORE_INTERNAL_OPEN' };
+  }
+  if (deal.closedAt.getTime() > now.getTime() + 60_000) {
+    return { matched: false, reason: 'PROVIDER_CLOSE_IN_FUTURE' };
+  }
+  if (Math.abs(deal.closedAt.getTime() - trade.closedAt.getTime()) > 180_000) {
+    return { matched: false, reason: 'PROVIDER_CLOSE_TIME_DELTA_EXCEEDS_WINDOW' };
   }
   // The side on a cTrader CLOSING deal may be the opposite of the position
   // direction. We do not infer it from a close deal: exact provider position
