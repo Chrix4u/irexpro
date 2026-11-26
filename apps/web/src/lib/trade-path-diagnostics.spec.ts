@@ -1,5 +1,5 @@
 import type { TradeExecutionView } from '@irexpro/types/execution';
-import { executionPathDiagnostics } from './trade-path-diagnostics';
+import { closedTradePathPresentation, executionPathDiagnostics } from './trade-path-diagnostics';
 
 const trade = (overrides: Partial<TradeExecutionView> = {}): TradeExecutionView => ({
   id: 'trade-1',
@@ -46,5 +46,31 @@ describe('executionPathDiagnostics', () => {
 
   it('returns null instead of inventing path diagnostics for legacy trades', () => {
     expect(executionPathDiagnostics(trade())).toBeNull();
+  });
+});
+
+describe('closedTradePathPresentation', () => {
+  it('keeps missing closed-trade telemetry explicit instead of hiding the path section', () => {
+    expect(closedTradePathPresentation(trade())).toEqual({
+      diagnostics: null,
+      unavailable: true,
+    });
+  });
+
+  it('preserves real recorded zero values and partial path evidence', () => {
+    const result = closedTradePathPresentation(trade({
+      maxFavorablePnl: '0.00',
+      pathObservationCount: 1,
+      realisedPnl: null,
+    }));
+    expect(result.unavailable).toBe(false);
+    expect(result.diagnostics?.maxFavorablePnl).toBe('0.00');
+    expect(result.diagnostics?.maxAdversePnl).toBeNull();
+    expect(result.diagnostics?.observationCount).toBe(1);
+  });
+
+  it('does not show a missing historical path notice for rejected or open trades', () => {
+    expect(closedTradePathPresentation(trade({ status: 'OPEN' })).unavailable).toBe(false);
+    expect(closedTradePathPresentation(trade({ status: 'REJECTED' })).unavailable).toBe(false);
   });
 });
