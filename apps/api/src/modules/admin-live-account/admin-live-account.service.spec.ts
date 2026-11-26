@@ -245,6 +245,18 @@ describe('AdminLiveAccountService', () => {
     );
   });
 
+  describe('recovery diagnostics', () => {
+    it('only reads the latest run for the requested connection', async () => {
+      runRepo.find.mockResolvedValue([]);
+      await expect(service.getRecoveryDiagnostics('conn-1')).resolves.toBeNull();
+      expect(runRepo.find).toHaveBeenCalledWith({
+        where: { brokerConnectionId: 'conn-1' },
+        order: { createdAt: 'DESC', id: 'DESC' },
+        take: 1,
+      });
+    });
+  });
+
   // ─── GET /admin/live-account/overview ─────────────────────────────────────
 
   describe('overview — connection state counts (bucket mapping)', () => {
