@@ -1910,7 +1910,7 @@ export class BrokerService {
     connectionId: string,
     userId: string,
   ): Promise<{ connection: BrokerConnection; positions: BrokerPositionDisplay[] }> {
-    return this.readConnectionPositions(connectionId, userId, (adapter) =>
+    return this.readConnectionPositions<BrokerPositionDisplay>(connectionId, userId, (adapter) =>
       adapter.getOpenPositionDisplay ? adapter.getOpenPositionDisplay() : adapter.getOpenPositions(),
     );
   }
