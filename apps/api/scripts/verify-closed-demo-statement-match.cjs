@@ -111,8 +111,14 @@ function economicKey(row) {
  * direction, fill_price == entry, exit_price == closing price, lot_size ==
  * lots, and the trade closed on the same UTC calendar day. Exact decimals.
  */
+function closedUtcDay(value) {
+  if (value == null) return null;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : null;
+}
+
 function sameEconomics(db, statement, direction) {
-  const day = db.closed_at ? new Date(db.closed_at).toISOString().slice(0, 10) : null;
+  const day = closedUtcDay(db.closed_at);
   return day !== null && statement.day === day &&
     statement.symbol === db.instrument && statement.openingDirection === direction &&
     compareDecimal(db.fill_price, statement.entry) === 0 &&
@@ -165,6 +171,58 @@ function matchClosedTrades(closedDb, statementRows) {
   return { matched, unmatchedStatement, unmatchedTrades, ambiguousTrades, ambiguousStatement };
 }
 
+/**
+ * Diagnostic only: describe exactly one differing or unprovable economic
+ * dimension. Only unmatched rows are considered; never settle a trade from
+ * these observations. No identifiers or prices are returned by this summary.
+ */
+function singleFieldDifference(trade, statement) {
+  const direction = String(trade.direction || '').toUpperCase();
+  const compareText = (actual, expected, valid) =>
+    valid(actual) && valid(expected) ? (actual === expected ? 0 : 1) : null;
+  const day = closedUtcDay(trade.closed_at);
+  const fields = [
+    ['INSTRUMENT', compareText(trade.instrument, statement.symbol, (v) => typeof v === 'string' && v.length > 0)],
+    ['DIRECTION', compareText(direction, statement.openingDirection, (v) => ['BUY', 'SELL'].includes(v))],
+    ['UTC_DAY', compareText(day, statement.day, (v) => typeof v === 'string' && v.length === 10)],
+    ['ENTRY_PRICE', compareDecimal(trade.fill_price, statement.entry)],
+    ['EXIT_PRICE', compareDecimal(trade.exit_price, statement.exit)],
+    ['LOT_SIZE', compareDecimal(trade.lot_size, statement.lots)],
+  ];
+  const differences = fields.filter(([, comparison]) => comparison !== 0);
+  if (differences.length !== 1) return null;
+  const [field, comparison] = differences[0];
+  return (comparison === null ? 'MISSING_OR_INVALID_' : 'DIFFERENT_') + field;
+}
+
+function summarizeUnmatchedEconomics(closedMatch) {
+  const trades = closedMatch.unmatchedTrades;
+  const statements = closedMatch.unmatchedStatement;
+  const { edges, counts } = reciprocalCandidates(trades, statements,
+    (trade, statement) => singleFieldDifference(trade, statement) !== null);
+  const candidates = statements.map(() => []);
+  edges.forEach((indices, tradeIndex) => {
+    indices.forEach((statementIndex) => candidates[statementIndex].push(tradeIndex));
+  });
+  const reasonCounts = {};
+  const add = (reason) => { reasonCounts[reason] = (reasonCounts[reason] || 0) + 1; };
+  candidates.forEach((tradeIndices, statementIndex) => {
+    if (counts[statementIndex] === 0) {
+      add('NO_SINGLE_FIELD_CANDIDATE');
+    } else if (tradeIndices.length !== 1 || edges[tradeIndices[0]].length !== 1) {
+      add('AMBIGUOUS_SINGLE_FIELD_CANDIDATES');
+    } else {
+      add(singleFieldDifference(trades[tradeIndices[0]], statements[statementIndex]));
+    }
+  });
+  return {
+    diagnosticOnly: true,
+    statementDealsExamined: statements.length,
+    unmatchedTradesExamined: trades.length,
+    reasonCounts,
+  };
+}
+
 /** Compare P&L only for reciprocal matches with all valid economic fields. */
 function checkPnlComposition(closedDb, statementRows) {
   const mismatches = [], missingEconomics = [];
@@ -209,6 +267,7 @@ function summarize(input) {
       ambiguousDbTrades: closedMatch.ambiguousTrades.length,
       ambiguousStatementDeals: closedMatch.ambiguousStatement.length,
     },
+    unmatchedEconomicDiagnostics: summarizeUnmatchedEconomics(closedMatch),
     pnlComposition: {
       checked: pnl.checked,
       mismatches: pnl.mismatches.length,
@@ -418,4 +477,4 @@ async function main() {
 if (require.main === module) {
   main().catch(() => { console.error('Statement match verification failed'); process.exitCode = 1; });
 }
-module.exports = { parseFingerprints, matchStranded, matchClosedTrades, checkPnlComposition, summarize, compareDecimal, normalizeDecimals, economicKey, utcDayBoundary, inspect };
+module.exports = { parseFingerprints, matchStranded, matchClosedTrades, checkPnlComposition, summarize, compareDecimal, normalizeDecimals, economicKey, utcDayBoundary, inspect, summarizeUnmatchedEconomics };
