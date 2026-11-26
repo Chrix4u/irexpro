@@ -63,3 +63,119 @@ Public-safe engineering checkpoint. Do not commit broker statements, customer in
 - ACC-01/ACC-03 source comparison: #803 and #805 predate the ownership-bound FILLED entry proof reused by #822. Review requirements recorded in [#803](https://github.com/Chrix4u/irexpro/pull/803#issuecomment-7192471120) and [#805](https://github.com/Chrix4u/irexpro/pull/805#issuecomment-7192471816). Integration and regression validation remain open.
 - TEL-01: #821 SQL reviewed statically; runtime verification and tenant-scope review remain open.
 - Next: build an independently reviewed integration candidate against main, preserving #822, then validate with synthetic and non-production fixtures. ACC-02 remains unresolved; do not infer missing financial evidence or bypass release gates.
+
+## Detailed module delivery matrix — repository inventory 2026-11-26
+
+All items below are open engineering work unless explicitly supported by a linked passing test and applicable runtime evidence. This is a source-directory inventory, not a claim that the corresponding feature works. Parent workstreams above remain open until their dependent subtasks and acceptance criteria are verified. P0 denotes integrity/security or release blockers; P1 denotes core product delivery; P2 denotes non-blocking polish or conditional platform scope.
+
+### Identity, customer lifecycle and security — auth, users, audit
+
+- [ ] P0 IAM-01: Audit sign-in, registration, verification, reset and appeal API contracts; verify token expiry, refresh rotation/revocation, password hashing, throttling, enumeration resistance and negative tests.
+- [ ] P0 IAM-02: Verify user/broker connection ownership at query, service, controller and websocket boundaries; add cross-tenant and unauthorized role regression tests.
+- [ ] P1 IAM-03: Verify profile, KYC/identity status (where required), security settings, account recovery and administrative decisions; add schema constraints, API contracts, web/mobile UI states and E2E tests.
+- [ ] P0 IAM-04: Verify audit log redaction, actor attribution, correlation IDs, access scope and retention; test that credentials and financial identifiers are not leaked into public logs.
+- [ ] P1 IAM-05: Document authentication, recovery, privacy and support workflows; verify user-visible errors and release smoke tests.
+
+### Broker and account management — broker, broker-reconciliation, live-account, admin-live-account
+
+- [ ] P0 BRK-01: Inventory supported broker adapters and capability matrix; test direct OAuth token lifecycle, callback validation, account selection and separate DEMO/LIVE mapping against sandbox fixtures.
+- [ ] P0 BRK-02: Verify connection ownership, currency, account-mode, provider identity and precision handling; add fixtures for reconnects and multiple connections without cross-account state leakage.
+- [ ] P0 BRK-03: Validate read-only position/order/deal synchronization, pagination, stale snapshots, duplicate provider events, and missing or ambiguous evidence; retain pending states where proof is insufficient.
+- [ ] P0 BRK-04: Review administrative account controls and authorization with negative tests; verify that the web/mobile account view accurately reflects the selected connection and actual provider state.
+- [ ] P1 BRK-05: Document broker prerequisites, account selection, provider limits, supported features and sandbox verification evidence; no new paid infrastructure or live execution authority implied.
+
+### Order lifecycle and accounting — execution, trading, reconciliation, execution-authority, execution-control, risk
+
+- [ ] P0 EXE-02: Audit order/trade state transitions, idempotency keys, transactional uniqueness, partial fills, cancellation and broker response normalization with synthetic events.
+- [ ] P0 EXE-03: Integrate ACC-01/03 without losing #822 proof; verify duplicate/mismatched identity rejection and exact economic comparisons in both recovery paths. Re-run targeted and PostgreSQL concurrency tests.
+- [ ] P0 EXE-04: Verify fee, swap, realized/unrealized P&L, lot/volume and currency conventions across database, API, web and mobile using authoritative fixture totals.
+- [ ] P0 EXE-05: Verify start/stop, session isolation, operator authority, exposure and fail-closed invariants using simulated broker fixtures; no expansion of approved real-money authority.
+- [ ] P0 EXE-06: Audit uncertain-order recovery, stale market snapshots, retries, disconnect and process restart; confirm no duplicate submissions or fabricated provider identifiers.
+- [ ] P0 EXE-07: Validate API order/history/portfolio pagination, consistent lifecycle labels and reconciliation warnings; test missing and partial evidence across web/mobile clients.
+- [ ] P0 EXE-08: Verify risk-policy boundaries, configuration validation, concurrency and auditability with non-production tests; document rollback and fail-safe behavior.
+- [ ] P0 EXE-09: Verify migration and rollback compatibility, ledger evidence integrity and release gates; require authorized post-release checks before declaring settlement complete.
+
+### Market data, events and realtime — market-data, realtime, events, metrics, notifications
+
+- [ ] P1 DAT-01: Inventory streaming/REST sources, market clocks, instrument mapping, timeframes and timestamp conventions; test delayed, duplicate, incomplete and out-of-order samples.
+- [ ] P1 DAT-02: Audit storage retention, deduplication, indexing, provider reconnect and backfill coverage; verify freshness indicators and explicit unavailable-data state.
+- [ ] P1 DAT-03: Validate event/websocket authentication, subscription isolation, reconnect replay and rate limiting; test consistent dashboard updates and visible stale-state warnings.
+- [ ] P1 DAT-04: Audit notification delivery, preferences, authorization, retries, idempotency and failure reporting; add API/client and background-delivery tests without production sends.
+- [ ] P1 DAT-05: Verify health and metrics endpoints, bounded labels, monitoring thresholds and sensitive-data redaction; document data source status and recovery.
+
+### AI research — ai, ai-engine-client, strategy, services/ai-engine
+
+- [ ] P1 ML-01: Inventory model artifacts, features, data lineage, registry and strategy versions; validate data provenance and feature-time boundaries.
+- [ ] P1 ML-02: Verify API-to-engine schema, timeout, version mismatch and unavailable-model handling using deterministic non-production fixtures.
+- [ ] P1 ML-03: Review existing research branches and independent expert observations; preserve attribution and distinguish exploratory from qualified evidence.
+- [ ] P1 ML-04: Evaluate historical candidate models offline using chronological holdouts, transaction costs, calibration, drawdown and uncertainty; report failed as well as successful candidates.
+- [ ] P1 ML-05: Assess path telemetry completeness before evaluating profit-retention hypotheses; do not infer intratrade peaks from closed statements.
+- [ ] P1 ML-06: Verify research reproducibility, deterministic seeds where applicable, dependency locks, artifact integrity, model provenance and reviewable reports.
+- [ ] P1 ML-07: Review existing promotion governance and rollback evidence; keep new research separate from authorized execution. Verify no accidental model activation from CI.
+
+### Billing, subscriptions and global configuration — payments, subscriptions, performance-billing, performance-fees, global-config
+
+- [ ] P0 PAY-01: Audit monetary types, currency conversion boundaries, subscription state, fee calculations and exact ledger totals using synthetic fixtures.
+- [ ] P0 PAY-02: Verify provider callback signature, replay prevention, duplicate handling, authorization, idempotent reversal/refund and failure states in sandbox.
+- [ ] P1 PAY-03: Review billing invoices, payment history, subscription plans and status across API/web/mobile/admin; never show a pending or failed payment as settled.
+- [ ] P1 PAY-04: Validate global configuration schemas, restricted edit permissions, versioning, auditability and rollback; test configuration defaults and environment separation.
+- [ ] P1 PAY-05: Document provider setup, fees, payout limitations, reconciliation and customer-support flows; retain sensitive configuration outside GitHub.
+
+### Web portal — apps/web
+
+- [ ] P1 UI-01: Inventory all routes (landing, login/register, verification/recovery, dashboard, AI, market, trading, portfolio, strategy lab, onboarding, live account, payments, profile, security, settings); verify route/auth and API contract coverage.
+- [ ] P1 UI-02: Standardize responsive shell, compact navigation groups, accessible typography, clean cards, spacing, consistent loading/empty/error states and keyboard support.
+- [ ] P1 UI-03: Verify charts, timeframes, pan/zoom, quote timestamps, scanning/session status and distinction between broker-confirmed data and predictions; test responsive layouts.
+- [ ] P0 UI-04: Verify order history, realized versus unrealized P&L, position/account currency, fees, pending status and reconciliation warnings against shared deterministic fixtures.
+- [ ] P1 UI-05: Verify account settings, broker selection, onboarding, authentication, security and billing flows with role-based browser E2E.
+- [ ] P1 UI-06: Run browser E2E across supported viewports, accessibility and performance checks; document screenshots, build artifact and deployment smoke-test evidence.
+
+### Admin portal — apps/admin, admin-system
+
+- [ ] P0 ADM-02: Inventory admin routes and API endpoints; enforce operator role and permission boundaries, including deny-by-default and audit tests.
+- [ ] P1 ADM-03: Verify customer, broker status, subscription/payment, configuration, incident and reconciliation read views against API fixtures.
+- [ ] P1 ADM-04: Standardize accessible desktop/mobile layouts, search, pagination, filter states, error handling and safe confirmation flows.
+- [ ] P0 ADM-05: Verify privileged action attribution, redaction, safe exports and separation of administrative versus customer credentials; run admin E2E and release smoke tests.
+
+### Native mobile — apps/mobile
+
+- [ ] P1 MOB-02: Inventory React Native/Expo screens and shared API client contracts; verify Android/iOS feature coverage and document unsupported functions.
+- [ ] P0 MOB-03: Test secure token storage, logout/revocation, tenant/account switching, network recovery and sensitive-data handling.
+- [ ] P1 MOB-04: Refine compact native screens: clear cards, readable metrics, bottom navigation, safe-area handling, accessibility and useful empty/loading states.
+- [ ] P1 MOB-05: Verify dashboard, trading/history, broker/account, notification and settings flows using mocked API and on-device testing; clearly indicate stale or offline data.
+- [ ] P1 MOB-06: Verify mobile-ci and mobile-apk workflows, environment config, signed release artifacts, installation, upgrade and rollback on supported test devices; distinguish Android build from iOS distribution readiness.
+
+### Desktop and connectors — services/mt5-connector
+
+- [ ] P1 DESK-02: Confirm the existing Windows connector scope; do not claim a separate native desktop trading app exists without source evidence.
+- [ ] P1 DESK-03: Audit local connector authentication, secure configuration, connection status, errors, recovery, logging and supported operating systems using simulated connections.
+- [ ] P1 DESK-04: Verify Windows packaging/signing, installation, upgrade and uninstall in test environments; document that always-on hosting requirements are distinct from direct broker OAuth.
+- [ ] P2 DESK-05: Clarify native desktop client versus optional connector scope before introducing a separate application or additional infrastructure.
+
+### Shared client, database and delivery
+
+- [ ] P0 SHARED-01: Verify packages/api-client and packages/types against backend DTOs, error contracts, money/precision conventions, account-mode and pagination; add compatibility tests across consumers.
+- [ ] P0 DB-02: Inventory PostgreSQL schema/migrations, foreign keys, uniqueness and ownership constraints; test upgrade from supported releases, concurrent transactions and backup/restore with synthetic data.
+- [ ] P0 DB-03: Review migration safety, least-privilege credentials, recovery and retention; confirm restored database integrity and record release/rollback rehearsal evidence.
+- [ ] P0 REL-01: Inventory CI triggers and required checks for API, engine, web, admin, mobile, connector, database and security; ensure targeted regressions actually execute on affected paths.
+- [ ] P0 REL-02: Audit GitHub Actions pinning, checkout credentials, permissions, dependency locks, SBOMs, artifact provenance and publication controls; do not weaken gates to make builds pass.
+- [ ] P0 REL-03: Verify versioned release artifact manifest, checksums, migration compatibility, staging rehearsal, operator review and deployment guard before any runtime change.
+- [ ] P0 REL-04: Inventory authorized VPS runtime directories and rollback references read-only; preserve uncommitted work in the correct repository after secret review, and remove obsolete artifacts only after explicit safety verification.
+- [ ] P1 REL-05: Verify service health, runtime commit identity, logs/alerts, backup checks, rollback and non-trading smoke tests; document actual verification evidence.
+- [ ] P1 QA-02: Maintain a module-by-module acceptance matrix with test IDs, PR/commit, artifact digest, environment, runtime evidence and open blockers. Mark source implementation, CI and deployment separately.
+- [ ] P1 DOC-02: Maintain architecture, installation, operator runbooks, API documentation, customer help, accessibility and incident recovery; update checkpoint before ending each active work session.
+
+### Checkpoint — source update after #825
+
+- #824 merged (`a4f83b209`), recording compatibility review.
+- #825 merged (`47f60698`) after eleven reported successful checks (full API lint audit skipped). ACC-02 verifier now requires an explicit broker connection and applies a shared UTC window to both queries. Actual settlement discrepancies remain unresolved; no production record was changed.
+- #821 synthetic PostgreSQL test passed on an earlier candidate; current draft requires fresh CI following explicit checkout credential-privacy correction (`ae7abc5c`). Do not represent the corrected revision as passing until results are available.
+- Next actionable: verify #821 CI and review its synthetic fixture/SQL, then proceed to ACC-01/03 compatibility integration on current main. Account-specific runtime checks require an authorized connection and appropriate read-only access.
+- Scope audit: eight top-level application/service/package directories identified; native mobile and Windows connector source exist, standalone desktop application not verified.
+- Repository is currently public. Keep backlog sanitized; do not publish private evidence or change repository visibility without explicit review of access, CI and cost implications.
+
+### Latest active-session checkpoint
+
+- #821 current head `69e13e12`: synthetic PostgreSQL, tracked source scan and dependency checks reported success; required CI and CodeQL still pending after the container digest was pinned. No runtime diagnostic executed.
+- #827 current head `e268f56b`: added aggregate-only economic mismatch classification and synthetic regression coverage; CI running. Exact matching, ambiguity refusal and reconciliation status remain unchanged.
+- Resume: verify #821, #826 and #827 at their latest heads; merge only after required CI and review gates pass. Then perform ACC-02 authorized read-only verification or proceed with ACC-01/03 independent integration review if that access is blocked. No deployment or financial mutation occurred.
