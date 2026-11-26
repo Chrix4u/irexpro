@@ -8,6 +8,10 @@
 // no model execution, no trading authority.
 
 const Z95 = 1.959963984540054;
+const count = (n) => Number.isSafeInteger(n) && n >= 0;
+const positiveCount = (n) => count(n) && n > 0;
+// Bound the exact enumeration to the intended small-cohort research use.
+const MAX_FISHER_TOTAL = 10000;
 
 function finite(value) {
   return typeof value === 'number' && Number.isFinite(value);
@@ -15,7 +19,7 @@ function finite(value) {
 
 /** Wilson score interval for a binomial proportion. */
 function wilsonInterval(k, n, z = Z95) {
-  if (!Number.isInteger(k) || !Number.isInteger(n) || n <= 0 || k < 0 || k > n) return null;
+  if (!count(k) || !positiveCount(n) || k > n || z !== Z95) return null;
   const p = k / n;
   const denom = 1 + (z * z) / n;
   const center = p + (z * z) / (2 * n);
@@ -37,7 +41,9 @@ function logChoose(n, r) {
 
 /** Two-sided Fisher exact test for a 2x2 table [[a,b],[c,d]]. */
 function fisherExact2x2(a, b, c, d) {
+  if (![a, b, c, d].every(count)) return null;
   const n = a + b + c + d;
+  if (!positiveCount(n) || n > MAX_FISHER_TOTAL || a + b === 0 || c + d === 0 || a + c === 0 || b + d === 0) return null;
   const row1 = a + b;
   const col1 = a + c;
   // Hypergeometric log-probability of a table: C(col1, x) * C(n-col1,
@@ -52,12 +58,12 @@ function fisherExact2x2(a, b, c, d) {
     const lp = tableLogP(x);
     if (lp <= logBase + 1e-9) pSum += Math.exp(lp);
   }
-  return { p: pSum };
+  return { p: Math.min(1, pSum), assumption: 'INDEPENDENT_OBSERVATIONS' };
 }
 
 /** Hanley-McNeil standard error of the AUC. */
 function aucStandardError(auc, n1, n2) {
-  if (!finite(auc) || auc <= 0 || auc >= 1 || !Number.isInteger(n1) || !Number.isInteger(n2)) {
+  if (!finite(auc) || auc <= 0 || auc >= 1 || !positiveCount(n1) || !positiveCount(n2)) {
     return null;
   }
   const q1 = auc / (2 - auc);
@@ -74,7 +80,7 @@ function aucTest(auc, n1, n2) {
   const z = (auc - 0.5) / se;
   // normal two-sided p from |z|
   const p = 2 * (1 - normalCdf(Math.abs(z)));
-  return { auc, n1, n2, se, z, p, ci95: [auc - Z95 * se, auc + Z95 * se] };
+  return { auc, n1, n2, se, z, p, ci95: [Math.max(0, auc - Z95 * se), Math.min(1, auc + Z95 * se)], assumption: 'INDEPENDENT_OBSERVATIONS' };
 }
 
 function normalCdf(x) {
@@ -97,12 +103,15 @@ function erf(x) {
 
 /** Minimum |AUC-0.5| detectable at 80% power (two-sided alpha=0.05). */
 function minDetectableAucDelta(n1, n2) {
+  if (!positiveCount(n1) || !positiveCount(n2)) return null;
   const zA = 1.959963984540054; // alpha=0.05 two-sided
   const zB = 0.8416212335729143; // power=0.8
   let d = 0.05;
   for (let i = 0; i < 100; i++) {
     const se = aucStandardError(0.5 + d, n1, n2);
+    if (se === null) return null;
     const dNew = (zA + zB) * se;
+    if (!finite(dNew) || dNew >= 0.5) return null;
     if (Math.abs(dNew - d) < 1e-10) break;
     d = dNew;
   }
@@ -113,13 +122,14 @@ function minDetectableAucDelta(n1, n2) {
  * Smallest balanced n where (zA+zB) * SE <= delta; SE shrinks in n, so a
  * doubling scan plus binary search is exact for the integer answer. */
 function nNeededForAuc(delta) {
+  if (!finite(delta) || delta <= 0 || delta >= 0.5) return null;
   const zA = 1.959963984540054;
   const zB = 0.8416212335729143; // power=0.8
   const detectableAt = (n) => aucStandardError(0.5 + delta, n, n) * (zA + zB) <= delta;
   let hi = 2;
   while (!detectableAt(hi)) {
     hi *= 2;
-    if (hi > 1e9) return NaN;
+    if (hi > 1e9) return null;
   }
   let lo = Math.floor(hi / 2) + 1;
   while (lo < hi) {
@@ -136,8 +146,9 @@ function nNeededForAuc(delta) {
  * the payoff-asymmetry bound implied by net-negative cohorts.
  */
 function analyzeCohort(input) {
+  if (!input || typeof input !== 'object') return null;
   const required = ['total', 'wins', 'losses', 'abstainedWins', 'abstainedLosses'];
-  for (const key of required) if (!Number.isInteger(input[key])) return null;
+  for (const key of required) if (!count(input[key])) return null;
   const {
     total,
     wins,
@@ -147,8 +158,12 @@ function analyzeCohort(input) {
     auc = null,
     aucWinners = null,
     aucLosers = null,
+    settledNetUsd = null,
   } = input;
-  if (wins + losses !== total) return null;
+  if (!positiveCount(total) || wins + losses !== total) return null;
+  if (settledNetUsd !== null && !finite(settledNetUsd)) return null;
+  const hasAuc = [auc, aucWinners, aucLosers].some((v) => v !== null);
+  if (hasAuc && (!finite(auc) || auc < 0 || auc > 1 || !positiveCount(aucWinners) || !positiveCount(aucLosers) || aucWinners > wins || aucLosers > losses)) return null;
   const nonAbstainedWins = wins - abstainedWins;
   const nonAbstainedLosses = losses - abstainedLosses;
   if (nonAbstainedWins < 0 || nonAbstainedLosses < 0) return null;
@@ -173,22 +188,19 @@ function analyzeCohort(input) {
     nPerClassForAuc055: nNeededForAuc(0.05),
     nPerClassForAuc060: nNeededForAuc(0.1),
   };
-  // Payoff asymmetry: with a win rate above the design break-even but a net
-  // loss, the realized average loss must exceed (wins/losses) x average win
-  // under equal sizing. Design geometry: 1.6R target vs 1.0R stop.
+  // Counts alone establish a break-even dollar ratio, not a realized ratio.
+  // A negative settled net sum establishes a strict lower bound only.
   const payoffAsymmetry = {
-    breakevenAvgLossOverAvgWin: wins / losses,
-    designWinLossRatio: 1.6,
-    designBreakevenWinRate: 1 / (1 + 1.6),
-    note:
-      'Observed win rate above design break-even with net-negative P&L ' +
-      'implies realized payoff ratio below design under equal sizing; exit ' +
-      'management and costs truncate wins or extend losses. Variable ' +
-      'position sizes can distort this bound.',
+    breakevenAvgLossOverAvgWin: wins > 0 && losses > 0 ? wins / losses : null,
+    realizedDollarLossWinRatioStrictLowerBound:
+      wins > 0 && losses > 0 && settledNetUsd !== null && settledNetUsd < 0
+        ? wins / losses : null,
+    settledNetUsd,
+    note: 'No attribution to entry, exit, costs, sizing or executed stop/target geometry is possible from aggregate counts.',
   };
 
   return {
-    artifact: 'm1-cohort-statistics-v1',
+    artifact: 'm1-cohort-statistics-v2',
     researchOnly: true,
     executionAuthority: 'NONE',
     counts: {
@@ -206,6 +218,7 @@ function analyzeCohort(input) {
     fisherExactAbstainedVsNonAbstained: separation,
     auc: aucResult,
     detectability,
+    inferentialStatus: 'ILLUSTRATIVE_INDEPENDENCE_ASSUMPTION_UNVERIFIED',
     payoffAsymmetry,
     limitations:
       'Aggregate counts only; per-trade magnitudes, instruments, timestamps ' +
