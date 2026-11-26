@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -36,16 +37,22 @@ export default function ForgotPasswordScreen({
   const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  const [error, setError] = useState(false);
+  const submitting = useRef(false);
+
   async function handleSubmit() {
-    if (!identifier.trim()) return;
+    if (submitting.current || !identifier.trim()) return;
+    submitting.current = true;
     setLoading(true);
+    setError(false);
     try {
-      await api.forgotPassword({ identifier });
-    } catch {
-      // Even on error, show the generic message — no account enumeration.
-      // Only network errors would be visible to the user (caught below).
-    } finally {
+      await api.forgotPassword({ identifier: identifier.trim() });
       setSubmitted(true);
+    } catch {
+      // Do not disclose provider errors or imply an account exists.
+      setError(true);
+    } finally {
+      submitting.current = false;
       setLoading(false);
     }
   }
@@ -55,14 +62,15 @@ export default function ForgotPasswordScreen({
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <Text style={styles.title}>Forgot password</Text>
+      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
+      <Text accessibilityRole="header" style={styles.title}>Forgot password</Text>
       <Text style={styles.subtitle}>
         Enter your email or phone number to receive reset instructions
       </Text>
 
       {submitted ? (
         <View style={styles.infoBox}>
-          <Text style={styles.infoText}>
+          <Text accessibilityRole="alert" style={styles.infoText}>
             If an account exists for this identifier, password reset instructions
             have been sent. Check your email (including spam) or phone messages.
           </Text>
@@ -80,11 +88,17 @@ export default function ForgotPasswordScreen({
             style={styles.input}
             placeholder="Email or +233241234567"
             placeholderTextColor="#6b7494"
+            accessibilityLabel="Email or phone number"
+            autoComplete="username"
+            editable={!loading}
+            returnKeyType="go"
+            onSubmitEditing={handleSubmit}
             value={identifier}
             onChangeText={setIdentifier}
             autoCapitalize="none"
           />
-          <Pressable style={styles.button} onPress={handleSubmit} disabled={loading}>
+          {error ? <Text accessibilityRole="alert" style={styles.error}>Unable to confirm your request. Check your connection and try again.</Text> : null}
+          <Pressable accessibilityRole="button" accessibilityLabel="Send reset instructions" accessibilityState={{ disabled: loading || !identifier.trim(), busy: loading }} style={[styles.button, (loading || !identifier.trim()) && styles.disabled]} onPress={handleSubmit} disabled={loading || !identifier.trim()}>
             {loading ? (
               <ActivityIndicator color="#06231f" />
             ) : (
@@ -94,15 +108,19 @@ export default function ForgotPasswordScreen({
         </>
       )}
 
-      <Pressable style={styles.backLink} onPress={onBack}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Back to login" accessibilityState={{ disabled: loading }} disabled={loading} style={styles.backLink} onPress={onBack}>
         <Text style={styles.backLinkText}>Back to login</Text>
       </Pressable>
+      </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0b1020', padding: 24, justifyContent: 'center' },
+  container: { flex: 1, backgroundColor: '#0b1020' },
+  content: { flexGrow: 1, padding: 24, justifyContent: 'center' },
+  error: { color: '#f87171', fontSize: 14, marginBottom: 12 },
+  disabled: { opacity: 0.5 },
   title: { fontSize: 24, fontWeight: '700', color: '#e8edff', marginBottom: 4 },
   subtitle: { fontSize: 15, color: '#9aa7c7', marginBottom: 24 },
   input: {
@@ -123,6 +141,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   codeButtonText: { color: '#5eead4', fontSize: 14, fontWeight: '700' },
-  backLink: { alignSelf: 'center', marginTop: 16 },
+  backLink: { alignSelf: 'center', minHeight: 46, justifyContent: 'center', marginTop: 16 },
   backLinkText: { color: '#14b8a6', fontSize: 15, fontWeight: '500' },
 });
