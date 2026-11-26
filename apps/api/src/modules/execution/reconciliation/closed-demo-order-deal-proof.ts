@@ -155,20 +155,23 @@ function proveDemoClosedOrderFillCore(
     lots = trade.lotSize,
     price = trade.exitPrice,
     gross = trade.realisedPnl;
-  if (
-    ![qty, fill, lots].every((x) => typeof x === 'string' && decimal.test(x)) ||
-    typeof price !== 'string' ||
-    !decimal.test(price) ||
-    gross === null ||
-    gross === undefined ||
-    !/^-?\d+(?:\.\d+)?$/.test(gross) ||
-    compareDecimal(qty, '0') <= 0 ||
-    compareDecimal(fill, '0') !== 0 ||
-    order.avgFillPrice !== null ||
-    compareDecimal(qty, lots) !== 0 ||
-    compareDecimal(price, '0') <= 0
-  )
-    return no('CLOSE_ORDER_ECONOMICS_UNPROVEN');
+  // Report the first failed local premise without changing the proof,
+  // revealing financial values, or accepting weaker evidence.
+  if (typeof qty !== 'string' || !decimal.test(qty))
+    return no('CLOSE_REQUEST_QUANTITY_INVALID');
+  if (typeof fill !== 'string' || !decimal.test(fill))
+    return no('CLOSE_FILLED_QUANTITY_INVALID');
+  if (typeof lots !== 'string' || !decimal.test(lots))
+    return no('CLOSE_TRADE_LOT_SIZE_INVALID');
+  if (typeof price !== 'string' || !decimal.test(price))
+    return no('CLOSE_TRADE_EXIT_PRICE_INVALID');
+  if (gross === null || gross === undefined || !/^-?\d+(?:\.\d+)?$/.test(gross))
+    return no('CLOSE_TRADE_GROSS_PNL_INVALID');
+  if (compareDecimal(qty, '0') <= 0) return no('CLOSE_REQUEST_QUANTITY_NONPOSITIVE');
+  if (compareDecimal(fill, '0') !== 0) return no('CLOSE_FILL_ALREADY_RECORDED');
+  if (order.avgFillPrice !== null) return no('CLOSE_AVERAGE_FILL_PRICE_PRESENT');
+  if (compareDecimal(qty, lots) !== 0) return no('CLOSE_QUANTITY_LOT_MISMATCH');
+  if (compareDecimal(price, '0') <= 0) return no('CLOSE_TRADE_EXIT_PRICE_NONPOSITIVE');
   const matches = providerClosedDeals.filter((d) => d.externalOrderId === ref);
   if (matches.length !== 1) return no('PROVIDER_DEAL_NOT_UNIQUE');
   const deal = matches[0];
