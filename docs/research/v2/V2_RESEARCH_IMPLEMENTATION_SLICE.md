@@ -1,6 +1,8 @@
-# iRexPro AI V2 — Challenger Architecture Proposal
+# iRexPro AI V2 — Research Implementation Slice (Stage-0 Modules)
 
-Research-only proposal for independent review. Nothing in this document is deployed, executed or connected to any broker account. AI V1 remains the untouched Champion baseline in production posture; V2 is developed in complete isolation.
+Research-only implementation slice for independent review. This document implements the layers of the existing `V2_ARCHITECTURE_PROPOSAL.md` (P1–P10 principles, L0–L6 layers) and the `V2_CHAMPION_CHALLENGER_DEMO_EVALUATION_DESIGN.md` isolation model with executable, tested modules. Nothing here is deployed, executed or connected to any broker account. AI V1 remains the untouched Champion baseline; V2 is developed in complete isolation.
+
+**Relationship to the existing V2 research (PR #839 head 681e670c):** the prior slice delivered the architecture proposal, the defect-register audit, the decision-record contract, the attribution ledger module and the decision-level evaluation metrics (`v2-evaluation-metrics.cjs`). This slice adds the four missing executable planes and the seven-category audit companion — it does not alter or duplicate any existing artifact.
 
 ## 1. Purpose and red lines
 
@@ -8,33 +10,23 @@ Research-only proposal for independent review. Nothing in this document is deplo
 
 **Red lines (unchanged from the directive):** no production credentials or DB access, no broker orders, no LIVE execution, no replacement deploys, no production service modification, no private data in the public repo, no profit or production-readiness claims from retrospective performance. The comparative environment is **broker-connected Pepperstone cTrader DEMO accounts** — not internal paper trading — but only after this architecture passes independent review.
 
-## 2. Design principles (each responds to an audit finding)
+## 2. Design principles implemented by this slice (each traces to an audit category)
 
-1. **Calibration before edge** (finding b): a probability that cannot be scored against outcomes is not confidence. Every V2 prediction carries a provenance-checked calibrated probability with holdout sample size and P10/P90 bounds.
-2. **Cost-first admission** (finding g1): expected value is computed net of broker-observed friction; admission requires the *lower bound* of net expected R to be positive — never a point estimate.
-3. **Uncertainty is a first-class output** (finding d): sample sufficiency, bootstrap CIs and window stability are part of the decision record, not afterthoughts.
-4. **One accountable intelligence per question** (finding f): one calibrated probability core for entry; each guard is named, separately measurable and individually attributable; no overlapping heuristic policies.
-5. **Entry and exit measured separately** (finding e): entry intelligence and exit management are separate planes evaluated on identical fixtures before any architectural conclusion.
+1. **Calibration before edge** (category b): every admission input carries a provenance-checked calibrated probability with holdout sample size and P10/P90 bounds — raw scores are refused at the gate.
+2. **Cost-first admission** (category g1): expected value is computed net of broker-observed friction; admission requires the *lower bound* of net expected R to be positive — never a point estimate.
+3. **Uncertainty is a first-class output** (category d): bootstrap CIs, window stability and sample-sufficiency width are decision-record fields, not afterthoughts.
+4. **One accountable intelligence per question** (category f): no overlapping heuristic policies — the admission module is the single entry gate; each guard is named and individually attributable.
+5. **Entry and exit measured separately** (category e): the admission gate (entry intelligence) and the exit-policy plane are separate measurement planes evaluated on identical fixtures before any architectural conclusion.
 6. **Abstention is a decision, not a failure** (PR #836 taxonomy): abstention reasons are categorical, evidence-complete, and their counterfactual value is measured with selection-bias caveats.
-7. **Champion–Challenger discipline** (directive): V1 stays untouched; V2 runs as a separate engine identity on an isolated DEMO account; comparison is paired per market window.
+7. **Champion–Challenger discipline** (directive): V1 stays untouched; V2 runs as a separate engine identity on an isolated DEMO account; comparison is paired per market window and refuses unpaired evidence.
 
-## 3. Layered architecture
+## 3. This slice's modules mapped to the existing L0–L6 layers
 
-```
-L0  Evidence plane          as-recorded decision/outcome/cost evidence, append-only
-L1  Calibrated core         single probability model per pair+horizon, holdout-calibrated
-L2  Admission               lower-bound net-EV gate (cost-first, uncertainty-aware)
-L3  Exit policy plane       independently measured exit management (locks/trails/stops)
-L4  Evaluation harness      after-cost metrics, calibration, paired comparison, CIs
-L5  DEMO isolation          two-engine cTrader DEMO topology + immutable attribution
-L6  Governance              promotion gates, retirement criteria, frozen artifacts
-```
+The layers are defined in `V2_ARCHITECTURE_PROPOSAL.md` §3. This slice contributes executable contracts for L2, L4 and L5 (L0 decision-record and L6 evidence-ledger modules already exist from the prior slice):
 
-- **L0 — Evidence plane.** Reuses the evidence-completeness contract from PR #834 (12-field decision records) plus the cost fields the 19-Nov baseline proved mandatory: broker commission, spread, slippage per trade. Every record is decision-time-stamped (`RECORDED_AS_OF`), route-tagged, and refuses imputation.
-- **L1 — Calibrated core.** One probability model per (pair, horizon) producing P(win) with isotonic/Platt recalibration on a purged chronological holdout. Outputs: probability, P10/P90 (bootstrap over holdout residuals), holdout sample N. No raw scores leave this layer.
-- **L2 — Admission.** Implemented in `apps/api/scripts/research/v2-challenger-admission.cjs`: expected net R = p·avgWinR − (1−p)·avgLossR − costR, evaluated at **p10**. Abstention reasons: `MISSING_EVIDENCE`, `UNCALIBRATED_CONFIDENCE`, `COST_DOMINATED`, `PREDICTIVE_UNCERTAINTY_HIGH`, `DIRECTIONAL_CONFIDENCE_LOW`, `RISK_RESTRICTION`. PAPER_CONSERVATIVE costs can score but never admit.
+- **L2 — Admission (`v2-challenger-admission.cjs`).** Expected net R = p·avgWinR − (1−p)·avgLossR − costR, evaluated at **p10**. Abstention reasons aligned to the #836 taxonomy: `MISSING_EVIDENCE`, `UNCALIBRATED_CONFIDENCE`, `COST_DOMINATED`, `PREDICTIVE_UNCERTAINTY_HIGH`, `DIRECTIONAL_CONFIDENCE_LOW`, `RISK_RESTRICTION`. PAPER_CONSERVATIVE costs can score but never admit.
 - **L3 — Exit policy plane.** Exit candidates (fixed-geometry TP/SL, peak-retention locks, trailing) are policy functions over the position's realized path; each is replayed on identical MFE/MAE fixtures so exit variants never contaminate entry evaluation, and vice versa. A candidate exit policy is retired unless it beats the incumbent on paired windows (L4).
-- **L4 — Evaluation harness.** `v2-evaluation-metrics.cjs` (net after-cost, expectancy, max DD, profit factor, Brier/ECE calibration, chronological stability, deterministic bootstrap CIs, overlap clustering) and `v2-paired-champion-challenger.cjs` (paired per-window differences, exact sign test, paired bootstrap CI, minimum-window rule, unpaired-refusal). Win rate is reported and explicitly declared non-evidence.
+- **L4 — Evaluation harness.** `v2-settled-trade-economics.cjs` (net after-cost, expectancy, max DD, profit factor, Brier/ECE calibration, chronological stability, deterministic bootstrap CIs, overlap clustering) and `v2-paired-champion-challenger.cjs` (paired per-window differences, exact sign test, paired bootstrap CI, minimum-window rule, unpaired-refusal). Win rate is reported and explicitly declared non-evidence.
 - **L5 — DEMO isolation.** `v2-demo-isolation-topology.cjs` validates the two-engine descriptor against the six mandatory requirements (§4).
 - **L6 — Governance.** Frozen artifacts with hash; promotion requires the project's existing gates (PF ≥ 1.15, positive folds, Sharpe ≥ 1, ≤12% DD) *plus* V2 additions: calibration ECE below the base-rate benchmark, CI-excludes-zero on the paired comparison, minimum windows, and per-route sample sufficiency. Retirement: any shadow observer that has not produced a decision-relevant measurement in a review cycle is deleted, not archived (responds to observer sprawl, finding f).
 

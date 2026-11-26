@@ -242,7 +242,7 @@ jobs:
           NODE_ENV: test
 
       - name: Verify V2 Challenger evaluation metrics stay offline and deterministic
-        run: node --test apps/api/scripts/research/v2-evaluation-metrics.test.cjs
+        run: node --test apps/api/scripts/research/v2-settled-trade-economics.test.cjs
         env:
           NODE_ENV: test
 

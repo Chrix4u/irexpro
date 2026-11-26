@@ -1,6 +1,8 @@
-# iRexPro AI Engine V2 — Independent First-Pass Audit Findings
+# iRexPro AI Engine V2 — Independent Audit Findings: The Seven Directive Categories
 
 Research-only. Prepared on 2026-11-27 against `main` @ `b91e577c` and the open research stack PR #834, #836, #837, #838. Nothing in this document modifies production, risk or execution behavior. This is a first-pass static audit of the full engine surface; row-level authorized evidence is referenced only through already-public repository documents.
+
+**Coordination:** this document is the seven-category companion to the existing `V2_ENGINE_AUDIT_FINDINGS.md` defect register (D-01..D-05, PR #839). It organizes the evidence by the research directive's exact categories (a)–(g), adds the per-trade cost decomposition, route-level profit factors and the entry-vs-exit separation assessment. Where both documents cover the same defect, the D-register is the primary record and this document adds the category mapping and economics decomposition.
 
 ## 1. Scope and method
 

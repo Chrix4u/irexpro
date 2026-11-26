@@ -1,6 +1,8 @@
-# iRexPro AI V2 — Research Execution Backlog
+# iRexPro AI V2 — Research Execution Backlog Extension
 
 Research-only. Branch `research/ai-v2-challenger-architecture-20261127`. The production engine, risk controls and LIVE boundaries are untouched. Each item records its own definition of done; nothing is marked complete without committed reproducible evidence (test +, where applicable, authorized data export referenced).
+
+**Coordination:** this extends the existing `V2_EXECUTION_BACKLOG.md` workstreams (WS0–WS6, PR #839). Item mapping: Stage-0 foundations → WS0; RES-V2-01/02/03/05 → WS1/WS4/WS3 evidence prerequisites; EVAL-V2-10/11 and GOV-V2-01 → WS2; ISO-V2-10..14 → WS5; carried coordination → WS6. Task IDs here use the `-V2-` extension namespace and never renumber the existing workstream items.
 
 ## Execution contract (inherits docs/EXECUTION_BACKLOG.md)
 
@@ -12,7 +14,7 @@ Research-only. Branch `research/ai-v2-challenger-architecture-20261127`. The pro
 
 - [x] AUD-V2-01 First-pass full-engine audit across the seven weakness categories with code-grounded evidence (`docs/research/AI_V2_AUDIT_FINDINGS.md`).
 - [x] ARCH-V2-01 Layered Challenger architecture with the six DEMO-isolation requirements mapped (`docs/research/AI_V2_CHALLENGER_ARCHITECTURE.md`).
-- [x] EVAL-V2-01 Evaluation metrics module: net after-cost, expectancy, max DD, profit factor, Brier/ECE calibration, chronological stability, deterministic bootstrap CI, overlap clustering (`apps/api/scripts/research/v2-evaluation-metrics.cjs` + tests).
+- [x] EVAL-V2-01 Evaluation metrics module: net after-cost, expectancy, max DD, profit factor, Brier/ECE calibration, chronological stability, deterministic bootstrap CI, overlap clustering (`apps/api/scripts/research/v2-settled-trade-economics.cjs` + tests).
 - [x] EVAL-V2-02 Cost-first lower-bound admission policy with six abstention reasons aligned to the #836 taxonomy (`apps/api/scripts/research/v2-challenger-admission.cjs` + tests).
 - [x] EVAL-V2-03 Paired Champion–Challenger comparison: unpaired-refusal, exact sign test, paired bootstrap CI, minimum-window rule (`apps/api/scripts/research/v2-paired-champion-challenger.cjs` + tests).
 - [x] ISO-V2-01 DEMO-isolation topology validator for the six comparative-environment requirements, descriptor-only (`apps/api/scripts/research/v2-demo-isolation-topology.cjs` + tests).
@@ -48,8 +50,8 @@ Research-only. Branch `research/ai-v2-challenger-architecture-20261127`. The pro
 
 ## Checkpoint — 2026-11-27
 
-- Branch `research/ai-v2-challenger-architecture-20261127` off `main` @ `b91e577c`.
-- Stage 0 delivered in this PR: 4 research modules + 4 test files (35 tests), 3 research documents, CI wiring.
+- Branch `research/ai-v2-challenger-architecture-20261127`, stacked on the combined M1 research candidate (`55c11626`) and the prior V2 slice (`681e670c`, PR #839 head); nothing in the existing V2 or M1 artifacts was altered.
+- This extension delivered: `v2-settled-trade-economics.cjs` (trade-level after-cost economics, deterministic bootstrap CIs, overlap clustering), `v2-challenger-admission.cjs` (lower-bound cost-first admission), `v2-paired-champion-challenger.cjs` (paired statistical comparison), `v2-demo-isolation-topology.cjs` (six-requirement validator) — 4 modules + 4 test files, 35 tests, plus the seven-category audit companion and this backlog extension.
 - All tests run offline with synthetic fixtures; no authorized row-level data was accessed; no broker account was created or modified.
 - Blockers for Stage 1: authorized anonymized exports (RES-V2-01), broker cost export (RES-V2-05).
 - No profitability, edge or production-readiness claim is made or implied by this backlog.

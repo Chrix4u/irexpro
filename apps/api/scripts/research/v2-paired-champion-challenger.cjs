@@ -7,8 +7,8 @@
 // "advantaged" only when the paired CI of the difference excludes zero with
 // a sufficient window sample.
 const ARTIFACT = 'v2-paired-champion-challenger-v1';
-const { portfolioMetrics } = require('./v2-evaluation-metrics.cjs');
-const { mulberry32, percentile } = require('./v2-evaluation-metrics.cjs');
+const { portfolioMetrics } = require('./v2-settled-trade-economics.cjs');
+const { mulberry32, percentile } = require('./v2-settled-trade-economics.cjs');
 
 const finite = (v) => typeof v === 'number' && Number.isFinite(v);
 const DEFAULT_MIN_WINDOWS = 30;
