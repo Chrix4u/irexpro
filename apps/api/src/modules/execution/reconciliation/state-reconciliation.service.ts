@@ -814,9 +814,21 @@ export class StateReconciliationService {
               !trade.openedAt ||
               !Number.isFinite(trade.openedAt.getTime()) ||
               asOf.getTime() - trade.openedAt.getTime() > 6 * 3600_000 ||
-              !trade.closedAt ||
+              !trade.closedAt
+            )
+              continue;
+            // Closing deals are keyed by the native position, not the entry order.
+            // Reuse the unique, ownership-bound FILLED entry proof without
+            // persisting a guessed identifier or weakening the deal predicates.
+            const verifiedPositionRef = trade.externalPositionId
+              ? null
+              : await this.findVerifiedStoredPositionRef(trade);
+            const tradeForProof = verifiedPositionRef
+              ? { ...trade, externalPositionId: verifiedPositionRef }
+              : trade;
+            if (
               providerPositions.some(
-                (p) => p.externalOrderId === (trade.externalPositionId || trade.externalOrderId),
+                (p) => p.externalOrderId === (tradeForProof.externalPositionId || trade.externalOrderId),
               )
             )
               continue;
@@ -832,11 +844,14 @@ export class StateReconciliationService {
               accountUserId: connection.userId,
               accountConnectionId: connection.id,
               order,
-              trade,
+              trade: tradeForProof,
               providerClosedDeals: providerDeals,
               observedAt: asOf,
             });
-            if (!proof.matched) continue;
+            if (!proof.matched) {
+              this.logger.debug('DEMO closed-order proof deferred: ' + proof.reason);
+              continue;
+            }
             // The OrderService itself enforces fill <= requested and an
             // optimistic status CAS, and refuses to book a fill whose native
             // deal id is already attributed to another order row. If a
@@ -922,9 +937,21 @@ export class StateReconciliationService {
               !trade ||
               !trade.openedAt ||
               !Number.isFinite(trade.openedAt.getTime()) ||
-              !trade.closedAt ||
+              !trade.closedAt
+            )
+              continue;
+            // Closing deals are keyed by the native position, not the entry order.
+            // Reuse the unique, ownership-bound FILLED entry proof without
+            // persisting a guessed identifier or weakening the deal predicates.
+            const verifiedPositionRef = trade.externalPositionId
+              ? null
+              : await this.findVerifiedStoredPositionRef(trade);
+            const tradeForProof = verifiedPositionRef
+              ? { ...trade, externalPositionId: verifiedPositionRef }
+              : trade;
+            if (
               providerPositions.some(
-                (p) => p.externalOrderId === (trade.externalPositionId || trade.externalOrderId),
+                (p) => p.externalOrderId === (tradeForProof.externalPositionId || trade.externalOrderId),
               )
             )
               continue;
@@ -939,7 +966,7 @@ export class StateReconciliationService {
             // order-row proof has exit price / realised P&L to verify.
             if (agedTradeNeedsSettlementBackfill(trade)) {
               const backfilled = await this.resolution.backfillClosedDemoSettlement({
-                trade,
+                trade: tradeForProof,
                 brokerId: connection.brokerId,
                 accountType: String(connection.accountType).toUpperCase(),
                 providerDeals,
@@ -958,11 +985,16 @@ export class StateReconciliationService {
               accountUserId: connection.userId,
               accountConnectionId: connection.id,
               order,
-              trade,
+              trade: verifiedPositionRef
+                ? { ...trade, externalPositionId: verifiedPositionRef }
+                : trade,
               providerClosedDeals: providerDeals,
               observedAt: agedAsOf,
             });
-            if (!proof.matched) continue;
+            if (!proof.matched) {
+              this.logger.debug('DEMO closed-order proof deferred: ' + proof.reason);
+              continue;
+            }
             // The OrderService itself enforces fill <= requested and an
             // optimistic status CAS, and refuses to book a fill whose native
             // deal id is already attributed to another order row. If a
