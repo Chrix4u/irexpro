@@ -488,42 +488,7 @@ export class StateReconciliationService {
           // Use an exact, unique, ownership-bound order link for settlement proof
           // only; never copy an unverified position ID into the trade record.
           if (!settled.externalPositionId && settled.externalOrderId) {
-            const linkedOrders = await this.orderRepo.find({
-              where: {
-                tradeId: settled.id,
-                userId: settled.userId,
-                brokerConnectionId: settled.brokerConnectionId,
-                providerOrderId: settled.externalOrderId,
-                orderKind: OrderKind.MARKET,
-                status: OrderStatus.FILLED,
-              },
-              take: 2,
-            });
-            const linked = linkedOrders.length === 1 ? linkedOrders[0] : null;
-            const decimal = /^\d+(?:\.\d+)?$/;
-            const storedPositionRef =
-              linked &&
-              linked.tradeId === settled.id &&
-              linked.userId === settled.userId &&
-              linked.brokerConnectionId === settled.brokerConnectionId &&
-              linked.providerOrderId === settled.externalOrderId &&
-              linked.orderKind === OrderKind.MARKET &&
-              linked.status === OrderStatus.FILLED &&
-              /^\d+$/.test(linked.providerOrderId ?? '') &&
-              /^\d+$/.test(linked.providerPositionId ?? '') &&
-              linked.providerPositionId !== '0' &&
-              linked.instrument === settled.instrument &&
-              linked.direction === settled.direction &&
-              [
-                linked.filledQuantity,
-                linked.avgFillPrice,
-                settled.lotSize,
-                settled.fillPrice,
-              ].every((value) => typeof value === 'string' && decimal.test(value)) &&
-              compareDecimal(linked.filledQuantity, settled.lotSize) === 0 &&
-              compareDecimal(linked.avgFillPrice!, settled.fillPrice!) === 0
-                ? linked.providerPositionId
-                : null;
+            const storedPositionRef = await this.findVerifiedStoredPositionRef(settled);
             if (storedPositionRef) {
               tradeForProof = { ...settled, externalPositionId: storedPositionRef };
             } else if (
@@ -675,6 +640,18 @@ export class StateReconciliationService {
           // Resolve that mapping before asking for the live position; treating
           // the order id as a position id leaves real exposure invisible.
           let providerPositionRef = trade.externalPositionId ?? null;
+          // A known distinct native position ID must win over the legacy
+          // order-ID fallback. In DEMO, the filled entry order is already
+          // durable evidence; do not mark a position closed merely because
+          // a native ORDER ID is absent from the provider position list.
+          const storedDemoPositionRef =
+            !providerPositionRef &&
+            trade.status === TradeStatus.OPEN &&
+            CTRADER_FAMILY_BROKER_IDS.includes(connection.brokerId) &&
+            String(connection.accountType).toUpperCase() === 'DEMO'
+              ? await this.findVerifiedStoredPositionRef(trade)
+              : null;
+          if (storedDemoPositionRef) providerPositionRef = storedDemoPositionRef;
           if (
             !providerPositionRef &&
             trade.status === TradeStatus.PENDING &&
@@ -710,7 +687,9 @@ export class StateReconciliationService {
             const match = closedTrades.find(
               (ct) =>
                 ct.externalOrderId === providerPositionRef ||
-                (trade.externalOrderId !== null && ct.externalOrderId === trade.externalOrderId),
+                (!storedDemoPositionRef &&
+                  trade.externalOrderId !== null &&
+                  ct.externalOrderId === trade.externalOrderId),
             );
             const closed = await this.resolution.closeTradeFromProvider(trade, match ?? null);
             if (closed) {
@@ -1601,6 +1580,45 @@ export class StateReconciliationService {
     for (const key of Object.keys(credentials)) {
       credentials[key] = null;
     }
+  }
+
+  /** Read only an exact, unique, ownership-bound FILLED market order. */
+  private async findVerifiedStoredPositionRef(trade: Trade): Promise<string | null> {
+    if (!trade.externalOrderId) return null;
+    const linkedOrders = await this.orderRepo.find({
+      where: {
+        tradeId: trade.id,
+        userId: trade.userId,
+        brokerConnectionId: trade.brokerConnectionId,
+        providerOrderId: trade.externalOrderId,
+        orderKind: OrderKind.MARKET,
+        status: OrderStatus.FILLED,
+      },
+      take: 2,
+    });
+    const linked = linkedOrders.length === 1 ? linkedOrders[0] : null;
+    const decimal = /^\d+(?:\.\d+)?$/;
+    if (
+      !linked ||
+      linked.tradeId !== trade.id ||
+      linked.userId !== trade.userId ||
+      linked.brokerConnectionId !== trade.brokerConnectionId ||
+      linked.providerOrderId !== trade.externalOrderId ||
+      linked.orderKind !== OrderKind.MARKET ||
+      linked.status !== OrderStatus.FILLED ||
+      !/^\d+$/.test(linked.providerOrderId ?? '') ||
+      !/^\d+$/.test(linked.providerPositionId ?? '') ||
+      linked.providerPositionId === '0' ||
+      linked.instrument !== trade.instrument ||
+      linked.direction !== trade.direction ||
+      ![linked.filledQuantity, linked.avgFillPrice, trade.lotSize, trade.fillPrice].every(
+        (value) => typeof value === 'string' && decimal.test(value),
+      ) ||
+      compareDecimal(linked.filledQuantity, trade.lotSize) !== 0 ||
+      compareDecimal(linked.avgFillPrice!, trade.fillPrice!) !== 0
+    )
+      return null;
+    return linked.providerPositionId;
   }
 
   /** Best-effort provider closed-trade economics for external closes. */
