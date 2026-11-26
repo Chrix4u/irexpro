@@ -1052,7 +1052,7 @@ describe('StateReconciliationService', () => {
         direction: trade.direction,
         filledQuantity: '1.0',
         avgFillPrice: '1.1',
-      } as Order);
+      }) as Order;
 
     it('requires unique ownership-bound FILLED market evidence with exact economics', async () => {
       const trade = identityTrade();
