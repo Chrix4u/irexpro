@@ -179,3 +179,13 @@ All items below are open engineering work unless explicitly supported by a linke
 - #821 current head `69e13e12`: synthetic PostgreSQL, tracked source scan and dependency checks reported success; required CI and CodeQL still pending after the container digest was pinned. No runtime diagnostic executed.
 - #827 current head `e268f56b`: added aggregate-only economic mismatch classification and synthetic regression coverage; CI running. Exact matching, ambiguity refusal and reconciliation status remain unchanged.
 - Resume: verify #821, #826 and #827 at their latest heads; merge only after required CI and review gates pass. Then perform ACC-02 authorized read-only verification or proceed with ACC-01/03 independent integration review if that access is blocked. No deployment or financial mutation occurred.
+
+### Checkpoint — accounting and diagnostic integration
+
+- #826 merged (`23a54514`): 91-task module delivery matrix on main after seven successful checks.
+- #821 merged (`ee8d6479`): all eight checks passed, including synthetic PostgreSQL regression and security checks.
+- #827 merged (`392d745c`): eleven executed checks passed; optional full API lint skipped. Aggregate single-field diagnostics are not settlement proof.
+- GitHub compare against `392d745c` verified that the #803 and #805 head commits are already ancestors of main (43 and 18 commits behind, zero ahead). Main contains the fill-evidence entity, hardening migration and newer verified-position-reference helper. Do not re-merge the stale branch heads simply because their original PRs remain open. ACC-01/03 acceptance tests and deployment verification remain outstanding; ancestry alone is not full correctness proof.
+- #828 extends the synthetic diagnostic fixture to closed trades with complete, partial, absent and audit-only path evidence and pending settlement; CI required before merge.
+- Read-only staging quiescence guard passed at this checkpoint. This is a time-specific prerequisite result, not release approval or proof of historical reconciliation; recheck immediately before any authorized release.
+- Resume: verify #828 CI, review actual main integration and ledger regression results, then authorized read-only account-scoped reconciliation and release review. No production records or trading controls changed.
