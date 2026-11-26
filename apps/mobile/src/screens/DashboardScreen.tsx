@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   RefreshControl,
@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import type { OnboardingStatus } from '@irexpro/types';
 import { api } from '../lib/api';
+import { readinessPresentation } from './dashboard-screen.logic';
 import {
   ActionButton,
   Banner,
@@ -36,16 +37,21 @@ export default function DashboardScreen({
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const requestSequence = useRef(0);
   const load = useCallback(async () => {
+    const request = ++requestSequence.current;
+    setLoading(true);
     const [onboardingResult, brokerResult] = await Promise.allSettled([
       api.getOnboardingStatus(),
       api.listBrokerConnections(),
     ]);
 
+    if (request !== requestSequence.current) return;
     if (onboardingResult.status === 'fulfilled') {
       setOnboarding(onboardingResult.value);
       setError(null);
     } else {
+      setOnboarding(null);
       setError(
         onboardingResult.reason instanceof Error
           ? onboardingResult.reason.message
@@ -67,6 +73,7 @@ export default function DashboardScreen({
 
   useEffect(() => {
     void load();
+    return () => { requestSequence.current += 1; };
   }, [load]);
 
   const onRefresh = useCallback(() => {
@@ -74,11 +81,13 @@ export default function DashboardScreen({
     void load();
   }, [load]);
 
-  const effectiveBrokerConnected =
-    brokerTransportConnected ?? onboarding?.brokerConnected ?? false;
+  const effectiveBrokerConnected = brokerTransportConnected === true;
+  const readiness = readinessPresentation(
+    onboarding?.canStartTrading, onboarding?.brokerConnected, brokerTransportConnected, loading,
+  );
 
   const brokerReadinessMismatch =
-    onboarding !== null &&
+    !loading && onboarding !== null &&
     brokerTransportConnected !== null &&
     onboarding.brokerConnected !== brokerTransportConnected;
 
@@ -94,12 +103,12 @@ export default function DashboardScreen({
       return {
         label: effectiveBrokerConnected
           ? 'Review broker readiness'
-          : 'Connect broker',
+          : brokerTransportConnected === null ? 'Review broker connection' : 'Connect broker',
         action: onOpenBroker,
       };
     }
     return null;
-  }, [effectiveBrokerConnected, onOpenBroker, onOpenEligibility, onOpenProfile, onboarding]);
+  }, [brokerTransportConnected, effectiveBrokerConnected, onOpenBroker, onOpenEligibility, onOpenProfile, onboarding]);
 
   const completedSteps = onboarding
     ? [
@@ -128,14 +137,14 @@ export default function DashboardScreen({
       <View style={styles.hero}>
         <View style={styles.heroGlow} />
         <Text style={styles.eyebrow}>IREXPRO · MOBILE</Text>
-        <Text style={styles.title}>Trading command center</Text>
+        <Text accessibilityRole="header" style={styles.title}>Dashboard</Text>
         <Text style={styles.subtitle}>
-          Setup status, broker readiness and AI trading access in one place.
+          Your account and broker setup.
         </Text>
 
         <View style={styles.heroStats}>
           <View style={styles.heroStat}>
-            <Text style={styles.heroStatValue}>{completedSteps}/3</Text>
+            <Text style={styles.heroStatValue}>{loading || !onboarding || brokerTransportConnected === null ? '—' : `${completedSteps}/3`}</Text>
             <Text style={styles.heroStatLabel}>Setup steps</Text>
           </View>
           <View style={styles.heroDivider} />
@@ -143,12 +152,12 @@ export default function DashboardScreen({
             <Text
               style={[
                 styles.heroStatValue,
-                onboarding?.canStartTrading
+                readiness.label === 'READY'
                   ? styles.heroStatReady
                   : styles.heroStatPending,
               ]}
             >
-              {onboarding?.canStartTrading ? 'READY' : 'CHECK'}
+              {readiness.label.replaceAll('_', ' ')}
             </Text>
             <Text style={styles.heroStatLabel}>Trading gate</Text>
           </View>
@@ -157,11 +166,15 @@ export default function DashboardScreen({
 
       {error ? <Banner variant="error">{error}</Banner> : null}
 
+      {!loading && brokerTransportConnected === null ? (
+        <Banner variant="info">Broker status unavailable. Refresh to check again.</Banner>
+      ) : null}
+
       {brokerReadinessMismatch ? (
         <Banner variant="info">
           {brokerTransportConnected
-            ? 'Broker transport is connected, but trading readiness has not reconciled yet. Trading remains blocked until the server readiness gate confirms it.'
-            : 'Trading readiness still references a broker connection, but the live broker list is not currently connected. Refresh Broker before starting AI Trading.'}
+            ? 'Broker status and account readiness differ. Review the broker connection.'
+            : 'The broker list does not confirm the reported connection. Refresh to review.'}
         </Banner>
       ) : null}
 
@@ -173,10 +186,9 @@ export default function DashboardScreen({
           ]}
         >
           <View style={styles.readinessHeaderCopy}>
-            <Text style={styles.readinessTitle}>AI trading readiness</Text>
+            <Text accessibilityRole="header" style={styles.readinessTitle}>AI trading readiness</Text>
             <Text style={styles.readinessDescription}>
-              Every gate is verified by the server. Mobile cannot bypass
-              profile, eligibility, broker or model controls.
+              Server-verified account status.
             </Text>
           </View>
           <View
@@ -186,20 +198,8 @@ export default function DashboardScreen({
             ]}
           >
             <StatusPill
-              status={
-                loading
-                  ? 'CHECKING'
-                  : onboarding?.canStartTrading
-                    ? 'READY'
-                    : 'SETUP_REQUIRED'
-              }
-              tone={
-                loading
-                  ? 'neutral'
-                  : onboarding?.canStartTrading
-                    ? 'positive'
-                    : 'warning'
-              }
+              status={readiness.label}
+              tone={readiness.tone}
             />
           </View>
         </View>
@@ -226,13 +226,13 @@ export default function DashboardScreen({
             <ReadinessRow
               index="03"
               label="Broker connection"
-              complete={effectiveBrokerConnected}
+              complete={brokerTransportConnected}
               compact={compact}
             />
             <ReadinessRow
               index="04"
               label="Trading readiness"
-              complete={onboarding.canStartTrading}
+              complete={readiness.label === 'UNVERIFIED' || readiness.label === 'REVIEW_REQUIRED' ? null : readiness.label === 'READY'}
               compact={compact}
               last
             />
@@ -242,7 +242,7 @@ export default function DashboardScreen({
                 label={nextAction.label}
                 onPress={nextAction.action}
               />
-            ) : (
+            ) : readiness.label === 'READY' ? (
               <View style={styles.readyPanel}>
                 <Text style={styles.readyPanelTitle}>Setup gates complete</Text>
                 <Text style={styles.readyCopy}>
@@ -250,14 +250,18 @@ export default function DashboardScreen({
                   live runtime status.
                 </Text>
               </View>
+            ) : (
+              <ActionButton label="Refresh readiness" onPress={onRefresh} />
             )}
           </>
-        ) : null}
+        ) : (
+          <ActionButton label="Refresh readiness" onPress={onRefresh} />
+        )}
       </Card>
 
       <SectionHeader
         title="Account setup"
-        description="Manage the prerequisites that control broker and AI access."
+        description="Profile, eligibility and broker connection."
       />
 
       <View style={styles.actionGrid}>
@@ -295,7 +299,7 @@ function ReadinessRow({
 }: {
   index: string;
   label: string;
-  complete: boolean;
+  complete: boolean | null;
   compact?: boolean;
   last?: boolean;
 }) {
@@ -316,8 +320,8 @@ function ReadinessRow({
         <Text style={styles.statusText}>{label}</Text>
       </View>
       <StatusPill
-        status={complete ? 'COMPLETE' : 'PENDING'}
-        tone={complete ? 'positive' : 'warning'}
+        status={complete === null ? 'UNVERIFIED' : complete ? 'COMPLETE' : 'PENDING'}
+        tone={complete === null ? 'neutral' : complete ? 'positive' : 'warning'}
       />
     </View>
   );
@@ -339,7 +343,7 @@ function QuickAction({
       <Text style={styles.quickKicker}>{kicker}</Text>
       <Text style={styles.quickTitle}>{title}</Text>
       <Text style={styles.quickDescription}>{description}</Text>
-      <ActionButton label="Open" secondary onPress={onPress} />
+      <ActionButton label={`Open ${title.toLowerCase()}`} secondary onPress={onPress} />
     </View>
   );
 }
@@ -357,8 +361,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#1f6f69',
     backgroundColor: '#0d1d27',
-    padding: 20,
-    marginBottom: 16,
+    padding: 16,
+    marginBottom: 12,
   },
   heroGlow: {
     position: 'absolute',
@@ -377,7 +381,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1.4,
   },
   title: {
-    fontSize: 27,
+    fontSize: 23,
     fontWeight: '900',
     color: palette.text,
     marginTop: 8,
