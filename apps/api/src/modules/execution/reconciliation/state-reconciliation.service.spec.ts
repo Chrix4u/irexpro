@@ -1040,18 +1040,19 @@ describe('StateReconciliationService', () => {
       externalOrderId: '123456',
       fillPrice: '1.10000',
     });
-    const identityOrder = (trade: Trade): Order => ({
-      ...pendingOrder(),
-      tradeId: trade.id,
-      providerOrderId: trade.externalOrderId,
-      providerPositionId: '654321',
-      orderKind: OrderKind.MARKET,
-      status: OrderStatus.FILLED,
-      instrument: trade.instrument,
-      direction: trade.direction,
-      filledQuantity: '1.0',
-      avgFillPrice: '1.1',
-    } as Order);
+    const identityOrder = (trade: Trade): Order =>
+      ({
+        ...pendingOrder(),
+        tradeId: trade.id,
+        providerOrderId: trade.externalOrderId,
+        providerPositionId: '654321',
+        orderKind: OrderKind.MARKET,
+        status: OrderStatus.FILLED,
+        instrument: trade.instrument,
+        direction: trade.direction,
+        filledQuantity: '1.0',
+        avgFillPrice: '1.1',
+      } as Order);
 
     it('requires unique ownership-bound FILLED market evidence with exact economics', async () => {
       const trade = identityTrade();
@@ -1073,7 +1074,11 @@ describe('StateReconciliationService', () => {
     it('rejects missing and duplicate evidence, including a valid row plus an invalid duplicate', async () => {
       const trade = identityTrade();
       const linked = identityOrder(trade);
-      for (const candidates of [[], [linked, linked], [linked, { ...linked, direction: TradeDirection.SELL }]]) {
+      for (const candidates of [
+        [],
+        [linked, linked],
+        [linked, { ...linked, direction: TradeDirection.SELL }],
+      ]) {
         orderRepo.find.mockResolvedValue(candidates);
         await expect(service['findVerifiedStoredPositionRef'](trade)).resolves.toBeNull();
       }
