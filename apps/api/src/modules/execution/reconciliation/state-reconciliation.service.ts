@@ -760,6 +760,17 @@ export class StateReconciliationService {
       // only by the freshness fence; a retry adds nothing until the next
       // cycle re-reads the persisted status).
       const liveRecoveryAttemptedOrderIds = new Set<string>();
+      // Diagnostic-only counters: no identifiers, amounts, raw provider
+      // payloads or changes to recovery authority. Counts refer to candidates
+      // selected this cycle, not the entire unresolved order population.
+      const demoCloseRecovery = {
+        recent: { selected: 0, outcomes: {} as Record<string, number> },
+        aged: { selected: 0, outcomes: {} as Record<string, number> },
+      };
+      const recordCloseRecovery = (scope: 'recent' | 'aged', outcome: string): void => {
+        const outcomes = demoCloseRecovery[scope].outcomes;
+        outcomes[outcome] = (outcomes[outcome] ?? 0) + 1;
+      };
 
       // 7a2. Pepperstone USD DEMO only: exact broker DealList recovery for a
       // fully CLOSED position whose associated MARKET close order remained
@@ -781,6 +792,7 @@ export class StateReconciliationService {
           asOf,
           this.demoCloseRecoveryCursor.get(connection.id),
         );
+        demoCloseRecovery.recent.selected = recentCloseOrders.length;
         if (recentCloseOrders.length === 0) this.demoCloseRecoveryCursor.delete(connection.id);
         else
           this.demoCloseRecoveryCursor.set(
@@ -799,8 +811,10 @@ export class StateReconciliationService {
                   o.status === OrderStatus.RECONCILIATION_PENDING &&
                   o.orderKind === OrderKind.MARKET,
               ).length !== 1
-            )
+            ) {
+              recordCloseRecovery('recent', 'COMPETING_CLOSE_ORDERS');
               continue;
+            }
             const trade = await this.tradeRepo.findOne({
               where: {
                 id: order.tradeId!,
@@ -815,8 +829,10 @@ export class StateReconciliationService {
               !Number.isFinite(trade.openedAt.getTime()) ||
               asOf.getTime() - trade.openedAt.getTime() > 6 * 3600_000 ||
               !trade.closedAt
-            )
+            ) {
+              recordCloseRecovery('recent', 'TERMINAL_TRADE_OR_TIME_UNAVAILABLE');
               continue;
+            }
             // Closing deals are keyed by the native position, not the entry order.
             // Reuse the unique, ownership-bound FILLED entry proof without
             // persisting a guessed identifier or weakening the deal predicates.
@@ -831,8 +847,10 @@ export class StateReconciliationService {
                 (p) =>
                   p.externalOrderId === (tradeForProof.externalPositionId || trade.externalOrderId),
               )
-            )
+            ) {
+              recordCloseRecovery('recent', 'POSITION_STILL_OPEN');
               continue;
+            }
             // Bounded to this specific position's original entry: querying
             // from only the close order timestamp could hide partial deals.
             const providerDeals = await adapter.getClosedTrades(
@@ -850,6 +868,7 @@ export class StateReconciliationService {
               observedAt: asOf,
             });
             if (!proof.matched) {
+              recordCloseRecovery('recent', proof.reason);
               this.logger.debug('DEMO closed-order proof deferred: ' + proof.reason);
               continue;
             }
@@ -875,6 +894,7 @@ export class StateReconciliationService {
             );
             if (completed.status !== OrderStatus.FILLED)
               throw new Error('Broker-deal-proven close order was not terminally reconciled');
+            recordCloseRecovery('recent', 'FILLED_WITH_PROOF');
             resolutionRefs.push({
               type: ReconciliationDiscrepancyType.UNRESOLVED_EXECUTION_RESULT,
               internalRefId: order.id,
@@ -886,6 +906,7 @@ export class StateReconciliationService {
             });
             autoResolvedCount++;
           } catch (error) {
+            recordCloseRecovery('recent', 'RECOVERY_ERROR');
             errors++;
             this.logger.warn(
               'Pepperstone DEMO closed-order deal convergence ' +
@@ -918,6 +939,7 @@ export class StateReconciliationService {
           agedAsOf,
           this.agedDemoCloseRecoveryCursor.get(connection.id),
         ).filter((candidate) => !liveRecoveryAttemptedOrderIds.has(candidate.id));
+        demoCloseRecovery.aged.selected = agedCandidates.length;
         if (agedCandidates.length === 0) this.agedDemoCloseRecoveryCursor.delete(connection.id);
         else
           this.agedDemoCloseRecoveryCursor.set(
@@ -939,8 +961,10 @@ export class StateReconciliationService {
               !trade.openedAt ||
               !Number.isFinite(trade.openedAt.getTime()) ||
               !trade.closedAt
-            )
+            ) {
+              recordCloseRecovery('aged', 'TERMINAL_TRADE_OR_TIME_UNAVAILABLE');
               continue;
+            }
             // Closing deals are keyed by the native position, not the entry order.
             // Reuse the unique, ownership-bound FILLED entry proof without
             // persisting a guessed identifier or weakening the deal predicates.
@@ -955,8 +979,10 @@ export class StateReconciliationService {
                 (p) =>
                   p.externalOrderId === (tradeForProof.externalPositionId || trade.externalOrderId),
               )
-            )
+            ) {
+              recordCloseRecovery('aged', 'POSITION_STILL_OPEN');
               continue;
+            }
             // Bounded to this specific position's original entry: querying
             // from only the close order timestamp could hide partial deals.
             const providerDeals = await adapter.getClosedTrades(
@@ -994,6 +1020,7 @@ export class StateReconciliationService {
               observedAt: agedAsOf,
             });
             if (!proof.matched) {
+              recordCloseRecovery('aged', proof.reason);
               this.logger.debug('DEMO closed-order proof deferred: ' + proof.reason);
               continue;
             }
@@ -1019,6 +1046,7 @@ export class StateReconciliationService {
             );
             if (completed.status !== OrderStatus.FILLED)
               throw new Error('Aged DEMO close order was not terminally reconciled');
+            recordCloseRecovery('aged', 'FILLED_WITH_PROOF');
             resolutionRefs.push({
               type: ReconciliationDiscrepancyType.UNRESOLVED_EXECUTION_RESULT,
               internalRefId: order.id,
@@ -1031,6 +1059,7 @@ export class StateReconciliationService {
             });
             autoResolvedCount++;
           } catch (error) {
+            recordCloseRecovery('aged', 'RECOVERY_ERROR');
             errors++;
             this.logger.warn(
               'Aged DEMO closed-order recovery deferred for order ' +
@@ -1427,6 +1456,7 @@ export class StateReconciliationService {
           brokerId: connection.brokerId,
           accountType: connection.accountType,
           refreshedDiscrepancies: persisted.refreshed,
+          demoCloseRecovery,
         },
       });
 

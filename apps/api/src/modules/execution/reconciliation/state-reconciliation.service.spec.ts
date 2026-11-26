@@ -405,9 +405,13 @@ describe('StateReconciliationService', () => {
     );
   });
 
-  it.each([false, true])(
-    'Pepperstone DEMO closed-order recovery uses authentic DealList + domain fill only (distinct native ID=%s)',
-    async (distinct) => {
+  it.each([
+    { distinct: false, reject: false },
+    { distinct: true, reject: false },
+    { distinct: true, reject: true },
+  ])(
+    'Pepperstone DEMO closed-order recovery records proof outcome ($distinct, $reject)',
+    async ({ distinct, reject }) => {
       const previous = process.env.VPS_FOREX_SCANNER_USER_ID;
       process.env.VPS_FOREX_SCANNER_USER_ID = 'user-1';
       try {
@@ -475,7 +479,7 @@ describe('StateReconciliationService', () => {
         };
         orderRepo.find.mockResolvedValueOnce([orphan]).mockResolvedValue(distinct ? [linked] : []);
         tradeRepo.findOne.mockResolvedValue(terminal);
-        adapter.getClosedTrades.mockResolvedValue([deal]);
+        adapter.getClosedTrades.mockResolvedValue(reject ? [] : [deal]);
         orderService.applyFill.mockResolvedValue({ ...orphan, status: OrderStatus.FILLED });
         await service.runForConnection({
           ...connection(),
@@ -491,6 +495,25 @@ describe('StateReconciliationService', () => {
           new Date(opened.getTime() - 60_000),
           expect.any(Date),
         );
+        expect(persistence.completeRun).toHaveBeenCalledWith(
+          'run-1',
+          expect.objectContaining({
+            metadata: expect.objectContaining({
+              demoCloseRecovery: {
+                recent: {
+                  selected: 1,
+                  outcomes: reject ? { PROVIDER_DEAL_NOT_UNIQUE: 1 } : { FILLED_WITH_PROOF: 1 },
+                },
+                aged: { selected: 0, outcomes: {} },
+              },
+            }),
+          }),
+        );
+        if (reject) {
+          expect(orderService.applyFill).not.toHaveBeenCalled();
+          expect(adapter.modifyOrder).not.toHaveBeenCalled();
+          return;
+        }
         expect(orderService.applyFill).toHaveBeenCalledTimes(1);
         expect(orderService.applyFill).toHaveBeenCalledWith(
           'close-order-1',
