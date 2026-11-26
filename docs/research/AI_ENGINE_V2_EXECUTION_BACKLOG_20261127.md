@@ -50,9 +50,21 @@ production runtime.
   contract verified by execution); CI drift detector re-proves path
   existence and count reconciliation on every run; inventory tampering is a
   typed refusal. Inputs for P1-1..P1-6 (see the map's §10).
-- [ ] **P1-1** Direction-scorer unification spec (A1): inventory the four
+- [x] **P1-1** Direction-scorer unification spec (A1): inventory the four
   scorers' feature sets; define the single V2 contract (columns, units,
-  missing-value semantics). Acceptance: signed-off spec doc; no runtime edit.
+  missing-value semantics). Delivered →
+  `AI_ENGINE_V2_P1_1_DIRECTION_SCORER_UNIFICATION_SPEC_20261127.md` +
+  executable mirror
+  `apps/api/scripts/research/v2-direction-scorer-contract.cjs` (+ test, CI
+  step). Acceptance: signed-off spec doc; no runtime edit. Verified: four
+  missing-value rules recorded (SILENT_DEFAULT /
+  PARTIAL_DEFAULT_NAN_PROPAGATES / THROW_ON_NON_FINITE /
+  ZERO_OR_NEUTRAL_ON_MISSING); weight sums pinned (S1 = 1.00, S2 trend =
+  1.00, S4 = 1.00, S3 = 29 unnormalized entries); DS-1 fail-closed
+  refusals (`SCORER_INPUT_REQUIRED`, `SCORER_UNSUPPORTED_INSTRUMENT`,
+  `SCORER_INPUT_OUT_OF_RANGE`); confidence prohibited as an input; one
+  correction to component map §1 (the momentum `?? 0` default lives in S2,
+  not S3).
 - [ ] **P1-2** Reversal-definition unification spec (A2) with a frozen test
   corpus of borderline bars where the six definitions disagree today.
   Acceptance: disagreement corpus committed as synthetic fixtures.

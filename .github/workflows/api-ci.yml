@@ -236,6 +236,11 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify V2 direction-scorer contract (P1-1) inventory and DS-1 refusals
+        run: node --test apps/api/scripts/research/v2-direction-scorer-contract.test.cjs
+        env:
+          NODE_ENV: test
+
   build:
     name: Build
     runs-on: ubuntu-24.04
