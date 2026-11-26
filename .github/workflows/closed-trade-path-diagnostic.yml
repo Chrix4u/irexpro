@@ -1,0 +1,48 @@
+name: Closed trade path diagnostic fixture
+on:
+  pull_request:
+    paths:
+      - 'docs/operations/closed-trade-path-coverage.sql'
+      - 'docs/operations/tests/closed-trade-path-coverage-fixture.sql'
+      - '.github/workflows/closed-trade-path-diagnostic.yml'
+permissions:
+  contents: read
+jobs:
+  synthetic-postgres:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16-bookworm@sha256:92620daddcd947f8d5ab5ba66e848702fe443d87fed30c4cea8e389fd78dfc55 # Docker Official Image
+        env:
+          POSTGRES_USER: fixture
+          POSTGRES_PASSWORD: fixture
+          POSTGRES_DB: irexpro_path_coverage_fixture
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fixture -d irexpro_path_coverage_fixture"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: fixture
+      PGPASSWORD: fixture
+      PGDATABASE: irexpro_path_coverage_fixture
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Run diagnostic against isolated synthetic database
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f docs/operations/tests/closed-trade-path-coverage-fixture.sql
+          psql -X -qAt -v ON_ERROR_STOP=1 -f docs/operations/closed-trade-path-coverage.sql > actual.txt
+          cat > expected.txt <<'EOF'
+          OPEN|AMBIGUOUS_LINK|NO_MEASURED_PATH|1|0|0|0|0
+          OPEN|EXACT_LINK_DISTINCT_FROM_ORDER|NO_MEASURED_PATH|1|0|0|0|0
+          OPEN|INVALID_LINK|NO_MEASURED_PATH|1|0|0|0|0
+          OPEN|ORDER_ONLY_NO_EXACT_LINK|NO_MEASURED_PATH|1|0|0|0|0
+          EOF
+          diff -u expected.txt actual.txt
