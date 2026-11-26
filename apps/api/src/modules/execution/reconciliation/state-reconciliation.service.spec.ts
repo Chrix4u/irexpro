@@ -1034,6 +1034,75 @@ describe('StateReconciliationService', () => {
     });
   });
 
+  describe('verified stored entry identity contract', () => {
+    const identityTrade = (): Trade => ({
+      ...openTrade(),
+      externalOrderId: '123456',
+      fillPrice: '1.10000',
+    });
+    const identityOrder = (trade: Trade): Order => ({
+      ...pendingOrder(),
+      tradeId: trade.id,
+      providerOrderId: trade.externalOrderId,
+      providerPositionId: '654321',
+      orderKind: OrderKind.MARKET,
+      status: OrderStatus.FILLED,
+      instrument: trade.instrument,
+      direction: trade.direction,
+      filledQuantity: '1.0',
+      avgFillPrice: '1.1',
+    } as Order);
+
+    it('requires unique ownership-bound FILLED market evidence with exact economics', async () => {
+      const trade = identityTrade();
+      orderRepo.find.mockResolvedValue([identityOrder(trade)]);
+      await expect(service['findVerifiedStoredPositionRef'](trade)).resolves.toBe('654321');
+      expect(orderRepo.find).toHaveBeenCalledWith({
+        where: {
+          tradeId: trade.id,
+          userId: trade.userId,
+          brokerConnectionId: trade.brokerConnectionId,
+          providerOrderId: trade.externalOrderId,
+          orderKind: OrderKind.MARKET,
+          status: OrderStatus.FILLED,
+        },
+        take: 2,
+      });
+    });
+
+    it('rejects missing and duplicate evidence, including a valid row plus an invalid duplicate', async () => {
+      const trade = identityTrade();
+      const linked = identityOrder(trade);
+      for (const candidates of [[], [linked, linked], [linked, { ...linked, direction: TradeDirection.SELL }]]) {
+        orderRepo.find.mockResolvedValue(candidates);
+        await expect(service['findVerifiedStoredPositionRef'](trade)).resolves.toBeNull();
+      }
+    });
+
+    it.each([
+      { tradeId: 'another-trade' },
+      { userId: 'another-user' },
+      { brokerConnectionId: 'another-connection' },
+      { providerOrderId: '123457' },
+      { providerPositionId: '0' },
+      { providerPositionId: 'not-native' },
+      { providerPositionId: null },
+      { orderKind: OrderKind.LIMIT },
+      { status: OrderStatus.RECONCILIATION_PENDING },
+      { instrument: 'GBPUSD' },
+      { direction: TradeDirection.SELL },
+      { filledQuantity: '1.0001' },
+      { avgFillPrice: '1.10001' },
+      { avgFillPrice: null },
+    ])('refuses contradictory stored entry evidence: %j', async (patch) => {
+      const trade = identityTrade();
+      orderRepo.find.mockResolvedValue([{ ...identityOrder(trade), ...patch }]);
+      await expect(service['findVerifiedStoredPositionRef'](trade)).resolves.toBeNull();
+      expect(orderService.applyFill).not.toHaveBeenCalled();
+      expect(adapter.modifyOrder).not.toHaveBeenCalled();
+    });
+  });
+
   describe('runForConnection — mismatches', () => {
     it('uses the exact persisted native DEMO position ID before inferring an external close', async () => {
       const trade = {
