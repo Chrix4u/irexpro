@@ -828,7 +828,8 @@ export class StateReconciliationService {
               : trade;
             if (
               providerPositions.some(
-                (p) => p.externalOrderId === (tradeForProof.externalPositionId || trade.externalOrderId),
+                (p) =>
+                  p.externalOrderId === (tradeForProof.externalPositionId || trade.externalOrderId),
               )
             )
               continue;
@@ -951,7 +952,8 @@ export class StateReconciliationService {
               : trade;
             if (
               providerPositions.some(
-                (p) => p.externalOrderId === (tradeForProof.externalPositionId || trade.externalOrderId),
+                (p) =>
+                  p.externalOrderId === (tradeForProof.externalPositionId || trade.externalOrderId),
               )
             )
               continue;
