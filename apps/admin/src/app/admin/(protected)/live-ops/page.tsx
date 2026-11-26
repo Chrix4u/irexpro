@@ -18,6 +18,8 @@ import {
   formatAdminTimestamp,
   loadAdminConnections,
   loadAdminDiscrepancies,
+  loadAdminRecoveryDiagnostics,
+  type AdminRecoveryRun,
   loadAdminLiveOpsOverview,
   loadAdminProviderRegistry,
   type AdminConnectionRowView,
@@ -360,6 +362,122 @@ function DiscrepancyRow({ row }: { row: AdminDiscrepancyRowView }) {
         <time dateTime={row.detectedAt}>{formatAdminTimestamp(row.detectedAt)}</time>
       </td>
     </tr>
+  );
+}
+
+function RecoveryDiagnosticsPanel({ connections }: { connections: AdminConnectionRowView[] }) {
+  const [connectionId, setConnectionId] = useState('');
+  const [refresh, setRefresh] = useState(0);
+  const [result, setResult] = useState<AdminRecoveryRun | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+  const selected = connections.find((connection) => connection.id === connectionId);
+  const scopedId = selected?.id ?? '';
+
+  useEffect(() => {
+    let cancelled = false;
+    setResult(null);
+    setError(false);
+    if (!scopedId) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    void loadAdminRecoveryDiagnostics(scopedId)
+      .then((run) => {
+        if (!cancelled) setResult(run);
+      })
+      .catch(() => {
+        if (!cancelled) setError(true);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [scopedId, refresh]);
+
+  return (
+    <Card title="DEMO close-order recovery diagnostics">
+      <p className="muted text-sm">
+        Latest reconciliation run for a selected DEMO connection. These counts describe selected
+        recovery attempts, not all unresolved orders or current broker exposure.
+      </p>
+      <div className="filter-group">
+        <label htmlFor="recovery-connection">Broker connection</label>
+        <select
+          id="recovery-connection"
+          value={scopedId}
+          onChange={(event) => {
+            setResult(null);
+            setError(false);
+            setConnectionId(event.target.value);
+          }}
+        >
+          <option value="">Select a DEMO connection</option>
+          {connections.filter((connection) => connection.accountType === 'DEMO').map((connection) => (
+            <option key={connection.id} value={connection.id}>
+              {connection.displayName ?? connection.brokerName} · {connection.maskedAccountId ?? connection.id}
+            </option>
+          ))}
+        </select>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={!scopedId || loading}
+          onClick={() => setRefresh((value) => value + 1)}
+        >
+          Refresh diagnostics
+        </Button>
+      </div>
+      {!scopedId ? (
+        <p className="muted">Select a DEMO connection to inspect its latest run.</p>
+      ) : loading ? (
+        <p role="status">Loading diagnostics…</p>
+      ) : error ? (
+        <Alert variant="error">Recovery diagnostics could not be loaded.</Alert>
+      ) : !result ? (
+        <p className="muted">No reconciliation run is available.</p>
+      ) : (
+        <>
+          <p>
+            Latest run: <strong>{formatEnumLabel(result.status)}</strong> ·{' '}
+            {formatAdminTimestamp(result.completedAt ?? result.startedAt)}
+          </p>
+          {result.diagnostics ? (
+            <div className="admin-table-scroll">
+              <table className="admin-table" aria-label="Recovery outcomes">
+                <thead>
+                  <tr>
+                    <th scope="col">Recovery scope</th>
+                    <th scope="col">Selected</th>
+                    <th scope="col">Outcomes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(['recent', 'aged'] as const).map((scope) => (
+                    <tr key={scope}>
+                      <td>{scope === 'recent' ? 'Recent' : 'Historical'}</td>
+                      <td>{result.diagnostics![scope].selected}</td>
+                      <td>
+                        {Object.entries(result.diagnostics![scope].outcomes).length === 0
+                          ? 'No selected attempts'
+                          : Object.entries(result.diagnostics![scope].outcomes).map(([reason, count]) => (
+                              <div key={reason}>{formatEnumLabel(reason)}: {count}</div>
+                            ))}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="muted">Diagnostic evidence is unavailable for this run. This is not a zero count.</p>
+          )}
+        </>
+      )}
+    </Card>
   );
 }
 
@@ -856,6 +974,8 @@ export default function AdminLiveOpsPage() {
           </>
         )}
       </Card>
+
+      <RecoveryDiagnosticsPanel connections={authorityRows} />
 
       <Card title="Investigate further">
         <div className="admin-liveops-links">
