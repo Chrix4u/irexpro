@@ -1109,16 +1109,19 @@ describe('CTraderAdapter', () => {
       expect(findRequest(server, CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)).toBeUndefined();
     });
 
-    it.each([[], [{ positionId: 7654321, grossUnrealizedPnL: 0, netUnrealizedPnL: 0 }]])(
-      'keeps absent broker P&L distinct from an observed zero: %j',
-      async (...entries) => {
+    it.each([
+      { entries: [], expected: null },
+      { entries: [{ positionId: 7654321, grossUnrealizedPnL: 0, netUnrealizedPnL: 0 }], expected: '0.00' },
+    ])(
+      'keeps absent broker P&L distinct from an observed zero: $expected',
+      async ({ entries, expected }) => {
         scriptReconcile([SAMPLE_POSITION], []);
         server.on(CTRADER_PAYLOAD_TYPE.GET_POSITION_UNREALIZED_PNL_REQ, (payload, envelope) =>
           echo(
             CTRADER_PAYLOAD_TYPE.GET_POSITION_UNREALIZED_PNL_RES,
             {
               ctidTraderAccountId: payload.ctidTraderAccountId,
-              positionUnrealizedPnL: entries.filter(Boolean),
+              positionUnrealizedPnL: entries,
               moneyDigits: 2,
             },
             envelope,
@@ -1126,7 +1129,7 @@ describe('CTraderAdapter', () => {
         );
         await connectDemo();
         const [mark] = await adapter.getOpenPositionDisplay();
-        expect(mark.unrealisedPnl).toBe(entries.filter(Boolean).length ? '0.00' : null);
+        expect(mark.unrealisedPnl).toBe(expected);
       },
     );
 
