@@ -340,8 +340,11 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         assets: new Map<number, string>(),
       };
       const previousSession = this.sessions.get(accountId);
-      if (this.currentAccountId !== accountId || previousSession?.env !== env ||
-          previousSession.accessToken !== accessToken) {
+      if (
+        this.currentAccountId !== accountId ||
+        previousSession?.env !== env ||
+        previousSession.accessToken !== accessToken
+      ) {
         this.displayQuotes.clear();
       }
       this.sessions.set(accountId, session);
@@ -507,34 +510,49 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       const byPosition = new Map<number, number>();
       const duplicates = new Set<number>();
       for (const entry of pnls.entries) {
-        if (!Number.isSafeInteger(entry.positionId) || !Number.isSafeInteger(entry.netUnrealizedPnL)) {
+        if (
+          !Number.isSafeInteger(entry.positionId) ||
+          !Number.isSafeInteger(entry.netUnrealizedPnL)
+        ) {
           continue;
         }
         if (byPosition.has(entry.positionId)) duplicates.add(entry.positionId);
         byPosition.set(entry.positionId, entry.netUnrealizedPnL);
       }
-      const validDigits = Number.isInteger(pnls.moneyDigits) && pnls.moneyDigits >= 0 && pnls.moneyDigits <= 8;
+      const validDigits =
+        Number.isInteger(pnls.moneyDigits) && pnls.moneyDigits >= 0 && pnls.moneyDigits <= 8;
       return positions.map<BrokerPositionDisplay>((position) => {
         const pnl = byPosition.get(position.positionId);
-        const quote = this.displayQuotes.get(`${session.env}:${session.accountId}:${position.tradeData.symbolId}`);
+        const quote = this.displayQuotes.get(
+          `${session.env}:${session.accountId}:${position.tradeData.symbolId}`,
+        );
         const quoteTime = Number(quote?.timestamp);
         const age = observedAt.getTime() - quoteTime;
         const currentPrice =
-          quote?.bid != null && quote.ask != null &&
-          Number.isFinite(quoteTime) && age >= -SPOT_EVENT_MAX_CLOCK_AHEAD_MS && age <= 30_000
+          quote?.bid != null &&
+          quote.ask != null &&
+          Number.isFinite(quoteTime) &&
+          age >= -SPOT_EVENT_MAX_CLOCK_AHEAD_MS &&
+          age <= 30_000
             ? spotMidPrice(quote.bid, quote.ask)
             : null;
-        const unrealisedPnl = validDigits && pnl !== undefined && !duplicates.has(position.positionId)
-          ? moneyToDecimalString(pnl, pnls.moneyDigits)
-          : null;
+        const unrealisedPnl =
+          validDigits && pnl !== undefined && !duplicates.has(position.positionId)
+            ? moneyToDecimalString(pnl, pnls.moneyDigits)
+            : null;
         return {
           externalOrderId: String(position.positionId),
           currentPrice,
           unrealisedPnl,
           markSource: unrealisedPnl !== null || currentPrice !== null ? 'PROVIDER' : null,
-          markObservedAt: unrealisedPnl !== null || currentPrice !== null
-            ? new Date(currentPrice !== null ? Math.min(quoteTime, observedAt.getTime()) : observedAt.getTime())
-            : null,
+          markObservedAt:
+            unrealisedPnl !== null || currentPrice !== null
+              ? new Date(
+                  currentPrice !== null
+                    ? Math.min(quoteTime, observedAt.getTime())
+                    : observedAt.getTime(),
+                )
+              : null,
           markIsStale: false,
           commission: moneyToDecimalString(position.commission ?? 0, position.moneyDigits ?? 2),
           swap: moneyToDecimalString(position.swap ?? 0, position.moneyDigits ?? 2),
@@ -2106,13 +2124,18 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
     this.spotQuoteFlights.set(flightKey, flight);
     // Observe successful native quotes for the dashboard without changing
     // the strict quote promise, subscription lifecycle or execution gates.
-    void flight.then((quote) => {
-      const active = this.sessions.get(session.accountId);
-      if (this.currentAccountId === session.accountId &&
-          active?.env === session.env && active.accessToken === session.accessToken) {
-        this.displayQuotes.set(flightKey, quote);
-      }
-    }).catch(() => undefined);
+    void flight
+      .then((quote) => {
+        const active = this.sessions.get(session.accountId);
+        if (
+          this.currentAccountId === session.accountId &&
+          active?.env === session.env &&
+          active.accessToken === session.accessToken
+        ) {
+          this.displayQuotes.set(flightKey, quote);
+        }
+      })
+      .catch(() => undefined);
     void flight
       .finally(() => {
         if (this.spotQuoteFlights.get(flightKey) === flight) {
