@@ -30,6 +30,7 @@ import type { PortfolioLossPauseStatus } from "@/components/trading/PortfolioLos
 import type { StrategyLossBrakeOwnerStatus } from "@/components/trading/StrategyLossBrakeNotice";
 import { OwnerDemoLossClusterNotice } from "@/components/trading/OwnerDemoLossClusterNotice";
 import { AiTraderLoading } from "./ai-trader-loading";
+import { TradeReadinessDial } from "./trade-readiness-dial";
 import { api } from "@/lib/api";
 import { readBrokerPreference, rememberBrokerPreference, resolveWorkspaceBrokerId } from "@/lib/trader-broker-preference";
 import { formatAgeSeconds } from "@/lib/duration";
@@ -1469,8 +1470,6 @@ function TradeReadinessGauge({
   lastRunAt: string | null;
   entryDiagnostic: DemoFocusedEntryDiagnosticView | null;
 }) {
-  const angle = -180 + Math.max(0, Math.min(100, score)) * 1.8;
-  const scanAngle = -180 + scanFrame.sweepPercent * 1.8;
   const tone = band === "READY" ? "ready" : band === "FORMING" ? "forming" : "waiting";
   const entryEvidence = summarizeDemoEntryEvidence(entryDiagnostic);
   const evidenceDelayed = entryEvidence?.delayed === true;
@@ -1498,11 +1497,7 @@ function TradeReadinessGauge({
         aria-valuenow={score}
         aria-valuetext={`${headline}. ${explainTradeReadinessScore(score, tradeExpected)}`}
       >
-        <div className="ai-readiness__arc" aria-hidden="true">
-          <span className="ai-readiness__scan-needle" style={{ transform: `rotate(${scanAngle}deg)` }} />
-          <span className="ai-readiness__needle" style={{ transform: `rotate(${angle}deg)` }} />
-          <span className="ai-readiness__hub" />
-        </div>
+        <TradeReadinessDial score={score} />
         <strong className="ai-readiness__score">{score}</strong>
         <span className="ai-readiness__score-label">/ 100</span>
       </div>
@@ -1551,14 +1546,15 @@ function TradeReadinessGauge({
         </div>
       ) : null}
       <div className="ai-readiness__legend" aria-hidden="true">
-        <span><i className="is-waiting" />Wait</span>
-        <span><i className="is-forming" />Forming</span>
-        <span><i className="is-ready" />Ready</span>
+        <span><i className="is-low" />0–25</span>
+        <span><i className="is-developing" />25–50</span>
+        <span><i className="is-forming" />50–70</span>
+        <span><i className="is-high" />70–100</span>
       </div>
       <p className="ai-readiness__disclaimer">
         {tradeExpected
-          ? "Green means the current setup is eligible. Final dispatch checks can still prevent an order if conditions change."
-          : "The white needle is the real readiness score. The moving teal sweep shows continuous scanning activity; it does not change the model score."}
+          ? "The model reports an eligible setup. Final dispatch checks can still prevent an order if conditions change."
+          : "The needle tracks the real model score. Colour bands show score ranges, not order permission. Scanner activity is shown separately."}
       </p>
     </section>
   );
