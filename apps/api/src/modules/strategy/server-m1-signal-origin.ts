@@ -1,6 +1,48 @@
 import type { AiSignalCandidate } from './interfaces/strategy.interface';
 
 /**
+ * Frozen strategy-code identities shared by the signal pipeline, evidence
+ * queries and guards. Single source of truth: runtime admission, evidence
+ * SQL and drawdown guards must reference these constants instead of
+ * repeating string literals, so a future model rollout cannot silently
+ * split DEMO and LIVE onto divergent identities.
+ */
+export const EXTERNAL_IREXPRO_STRATEGY_CODES = Object.freeze({
+  legacyM1Tactical: 'external-irexpro-m1-tactical',
+  primaryEnsemble: 'external-irexpro-multimodel-ensemble',
+} as const);
+
+/**
+ * Frozen identities shared by the signal pipeline. Recognizing an identity
+ * is not an execution grant; each account's existing certification boundary
+ * still applies. Historical DEMO-only model versions remain recognized for
+ * DEMO compatibility, not automatically production-qualified.
+ */
+export const PRIMARY_M1_MODEL_IDENTITY = Object.freeze({
+  strategyCode: EXTERNAL_IREXPRO_STRATEGY_CODES.primaryEnsemble,
+  modelVersion: 'external-provider/irexpro-multimodel-ensemble-v1/demo-v1',
+  timeframe: 'M1',
+} as const);
+
+function modelIdentity(
+  candidate: Pick<AiSignalCandidate, 'strategyCode' | 'modelVersion' | 'timeframe'>,
+): string {
+  return `${candidate.strategyCode ?? ''}|${candidate.modelVersion ?? ''}|${candidate.timeframe ?? ''}`;
+}
+
+const PRIMARY_M1_MODEL_KEY = modelIdentity(PRIMARY_M1_MODEL_IDENTITY);
+
+const PROMOTED_EXTERNAL_DEMO_MODELS = new Set([
+  `${EXTERNAL_IREXPRO_STRATEGY_CODES.legacyM1Tactical}|external-provider/irexpro-m1-tactical/m1-tactical-v1|M1`,
+  `${EXTERNAL_IREXPRO_STRATEGY_CODES.legacyM1Tactical}|external-provider/irexpro-m1-tactical/m1-tactical-v2-m5-lifecycle|M1`,
+  PRIMARY_M1_MODEL_KEY,
+]);
+
+export function isServerPromotedExternalDemoModel(candidate: AiSignalCandidate): boolean {
+  return PROMOTED_EXTERNAL_DEMO_MODELS.has(modelIdentity(candidate));
+}
+
+/**
  * Unserializable in-process source proof. A Python relay, external
  * HTTP caller, or client-supplied metadata cannot forge this Symbol over
  * JSON. Only the local M1TacticalSchedulerService may brand a candidate,
@@ -36,22 +78,50 @@ export function hasServerM1Origin(candidate: AiSignalCandidate): boolean {
  * passes these additional LIVE freshness and unanimity checks.
  */
 export function isStrictLiveM1PrimarySignal(candidate: AiSignalCandidate): boolean {
+  return hasServerM1Origin(candidate) && evaluateM1PrimaryModelDecision(candidate) === 'QUALIFIED';
+}
+
+/**
+ * Account-independent classification of primary-model evidence.
+ * This is an analytical decision, NOT proof of origin or permission to
+ * execute. Never use it alone for broker admission.
+ */
+export type M1PrimaryModelDecision =
+  | 'QUALIFIED'
+  | 'MODEL_IDENTITY_MISMATCH'
+  | 'PRIMARY_MODEL_NOT_ADMITTED'
+  | 'EXPERIMENTAL_OR_UNKNOWN_ROUTE'
+  | 'M1_TIMING_MISMATCH'
+  | 'NATIVE_EXPERT_PROOF_MISSING'
+  | 'NATIVE_EXPERT_PROOF_INVALID'
+  | 'REVERSAL_BRIDGE_UNCONFIRMED';
+
+export function evaluateM1PrimaryModelDecision(
+  candidate: AiSignalCandidate,
+): M1PrimaryModelDecision {
   const m = candidate.metadata;
   if (
-    !hasServerM1Origin(candidate) ||
-    candidate.strategyCode !== 'external-irexpro-multimodel-ensemble' ||
-    candidate.modelVersion !== 'external-provider/irexpro-multimodel-ensemble-v1/demo-v1' ||
-    candidate.timeframe !== 'M1' ||
+    candidate.strategyCode !== PRIMARY_M1_MODEL_IDENTITY.strategyCode ||
+    candidate.modelVersion !== PRIMARY_M1_MODEL_IDENTITY.modelVersion ||
+    candidate.timeframe !== PRIMARY_M1_MODEL_IDENTITY.timeframe ||
     m?.signal_source !== 'EXTERNAL_PROVIDER' ||
-    m?.external_provider_paper_only !== true ||
-    m?.multimodel_execution_authority_path !== 'PRIMARY_PLAN_B' ||
-    m?.multimodel_plan_b_paper_admitted !== true ||
-    m?.m1_professional_fallback !== false ||
+    m?.external_provider_paper_only !== true
+  ) {
+    return 'MODEL_IDENTITY_MISMATCH';
+  }
+  if (
+    m.multimodel_execution_authority_path !== 'PRIMARY_PLAN_B' ||
+    m.multimodel_plan_b_paper_admitted !== true
+  ) {
+    return 'PRIMARY_MODEL_NOT_ADMITTED';
+  }
+  if (
+    m.m1_professional_fallback !== false ||
     m?.m5_early_transition_handoff !== false ||
     m?.m1_pepperstone_demo_alternative_trial !== false ||
     m?.extension_exhaustion_demo_scout !== false
   ) {
-    return false;
+    return 'EXPERIMENTAL_OR_UNKNOWN_ROUTE';
   }
 
   const strictRoutes: Record<string, string> = {
@@ -61,17 +131,20 @@ export function isStrictLiveM1PrimarySignal(candidate: AiSignalCandidate): boole
   };
   const modelRoute = String(m.multimodel_plan_b_route ?? '');
   if (strictRoutes[modelRoute] !== undefined && strictRoutes[modelRoute] === m.m1_tactical_route)
-    return true;
+    return 'QUALIFIED';
 
   // A confirmed reversal may be timing-confirmed by a strong, same-side M1
   // impulse. This is PRIMARY_PLAN_B, not a DEMO experimental alternate.
   if (
     modelRoute !== 'CONFIRMED_REVERSAL' ||
-    !['M1_EARLY_TRANSITION', 'M1_TREND_CONTINUATION'].includes(String(m.m1_tactical_route ?? '')) ||
+    !['M1_EARLY_TRANSITION', 'M1_TREND_CONTINUATION'].includes(String(m.m1_tactical_route ?? ''))
+  )
+    return 'M1_TIMING_MISMATCH';
+  if (
     m.multimodel_trained_expert_native !== true ||
     m.multimodel_trained_expert_direction !== candidate.direction
   )
-    return false;
+    return 'NATIVE_EXPERT_PROOF_MISSING';
   const votesLong = Number(m.multimodel_trained_expert_long_votes);
   const votesShort = Number(m.multimodel_trained_expert_short_votes);
   const confidence = m.multimodel_trained_expert_confidence;
@@ -91,13 +164,15 @@ export function isStrictLiveM1PrimarySignal(candidate: AiSignalCandidate): boole
     age < 0 ||
     age > 120
   )
-    return false;
+    return 'NATIVE_EXPERT_PROOF_INVALID';
 
   // The M1 continuation ↔ Plan-B reversal bridge has an additional strict
   // same-snapshot M1/M5 proof requirement in evaluateMultimodelDemoAuthority,
   // reported as this immutable upstream flag.
   if (m.m1_tactical_route === 'M1_TREND_CONTINUATION') {
-    return m.multimodel_primary_reversal_timing_bridge === true;
+    return m.multimodel_primary_reversal_timing_bridge === true
+      ? 'QUALIFIED'
+      : 'REVERSAL_BRIDGE_UNCONFIRMED';
   }
-  return m.m1_tactical_route === 'M1_EARLY_TRANSITION';
+  return m.m1_tactical_route === 'M1_EARLY_TRANSITION' ? 'QUALIFIED' : 'M1_TIMING_MISMATCH';
 }

@@ -1598,6 +1598,80 @@ describe('RiskService', () => {
       }
     });
 
+    // Offline parity characterization. These synthetic fixtures deliberately
+    // retain the current LIVE risk gate; they never submit a broker order.
+    it.each(['1.10006', '1.10014'])(
+      'DEMO allocation-aware geometry preserves a five-pip stop at quote %s',
+      async (quote) => {
+        orderGeometry.resolveOrderGeometry.mockResolvedValue({
+          contractSize: ExactDecimal.parse('100000'),
+          freshQuote: ExactDecimal.parse(quote),
+          quoteRef: { source: 'BROKER_TEST' },
+        });
+        const result = await service.validateProposedTrade(
+          'user-1',
+          validTrade({
+            direction: 'SELL',
+            entryPrice: '0',
+            requestedLotSize: '0.05',
+            stopLoss: '1.10050',
+            takeProfit: '1.09920',
+            allocationAwarePaperSizing: true,
+            paperMarketReferenceEntryPrice: '1.10000',
+          }),
+        );
+        expect(result.decision).toBe('APPROVED');
+        if (result.decision !== 'APPROVED') throw new Error(result.rejectionReason);
+        expect(
+          ExactDecimal.parse(result.validatedOrder.stopLoss)
+            .sub(ExactDecimal.parse(quote))
+            .toString(),
+        ).toBe('0.0005');
+        expect(
+          ExactDecimal.parse(quote)
+            .sub(ExactDecimal.parse(result.validatedOrder.takeProfit))
+            .toString(),
+        ).toBe('0.0008');
+      },
+    );
+
+    it.each(['1.10006', '1.10014'])(
+      'LIVE absolute market geometry rejects a shortened stop at quote %s',
+      async (quote) => {
+        brokerService.findConnectionById.mockResolvedValue(
+          defaultConnection({ accountType: 'LIVE' }),
+        );
+        sessionRepo.findOne.mockResolvedValue(
+          defaultSession({ executionMode: ExecutionMode.FULL_AUTO }),
+        );
+        sessionResolution.resolveActiveSessionAuthority.mockResolvedValue({
+          sessionId: 'session-1',
+          sessionGeneration: 1,
+          executionMode: ExecutionMode.FULL_AUTO,
+          brokerConnectionId: 'conn-1',
+        });
+        orderGeometry.resolveOrderGeometry.mockResolvedValue({
+          contractSize: ExactDecimal.parse('100000'),
+          freshQuote: ExactDecimal.parse(quote),
+          quoteRef: { price: quote, direction: 'SELL', source: 'broker-current-price' },
+        });
+        const result = await service.validateProposedTrade(
+          'user-1',
+          validTrade({
+            direction: 'SELL',
+            entryPrice: '0',
+            requestedLotSize: '0.05',
+            stopLoss: '1.10050',
+            takeProfit: '1.09920',
+            executionMode: ExecutionMode.FULL_AUTO,
+          }),
+        );
+        expect(result.decision).toBe('REJECTED');
+        if (result.decision !== 'REJECTED') throw new Error('Expected a risk rejection');
+        expect(result.rejectionCode).toBe(RiskRejectionCode.INVALID_SL_DISTANCE);
+      },
+    );
+
     it('LIVE MARKET entry without a fresh quote fails CLOSED with a typed code', async () => {
       brokerService.findConnectionById.mockResolvedValue(
         defaultConnection({ accountType: 'LIVE' }),
@@ -1707,6 +1781,114 @@ describe('RiskService', () => {
         expect(result.appliedRules).toContain('MAX_TRADE_RISK:GEOMETRY_UNVERIFIED');
         expect(result.appliedRules).toContain('LEVERAGE:GEOMETRY_UNVERIFIED');
       }
+    });
+
+    // ─── Nov 25, 2026 LIVE blockage: recorded 4.4 / 3.6 / 4.1-pip rejections ──
+    // The model emits stopDistance = max(1.1 × ATR14, 5 pips) — already at the
+    // five-pip floor. LIVE validates ABSOLUTE geometry against the fresh
+    // executable quote; quote movement between the closed-bar reference and
+    // dispatch shortened the measured distance below the minimum. These cases
+    // reproduce each recorded rejection exactly, broker-disconnected.
+    describe('recorded LIVE stop-distance geometry (Nov 25, 2026)', () => {
+      const referenceClose = '1.08000';
+      const tradeWithFivePipStop = (freshQuote: string) => {
+        orderGeometry.resolveOrderGeometry.mockResolvedValue({
+          contractSize: ExactDecimal.parse('100000'),
+          freshQuote: ExactDecimal.parse(freshQuote),
+          quoteRef: { price: freshQuote, direction: 'BUY', source: 'broker-current-price' },
+        });
+        return validTrade({
+          direction: 'BUY',
+          entryPrice: '0', // MARKET — validated against the fresh executable quote
+          stopLoss: '1.07950', // exactly 5.0 pips below the closed-bar reference
+          takeProfit: '1.08080', // 1.6R target above the same reference
+          executionMode: ExecutionMode.FULL_AUTO,
+        });
+      };
+
+      const liveConnectionSetup = () => {
+        brokerService.findConnectionById.mockResolvedValue(
+          defaultConnection({ accountType: 'LIVE' }),
+        );
+        sessionRepo.findOne.mockResolvedValue(
+          defaultSession({ executionMode: ExecutionMode.FULL_AUTO }),
+        );
+        sessionResolution.resolveActiveSessionAuthority.mockResolvedValue({
+          sessionId: 'session-1',
+          sessionGeneration: 1,
+          executionMode: ExecutionMode.FULL_AUTO,
+          brokerConnectionId: 'conn-1',
+        });
+      };
+
+      it.each([
+        ['4.4', '1.07994'], // ask drifted 0.6 pips below the reference close
+        ['3.6', '1.07986'],
+        ['4.1', '1.07991'],
+      ])(
+        'LIVE absolute geometry rejects the recorded %s-pip measured stop (fresh quote %s)',
+        async (expectedPips, freshQuote) => {
+          liveConnectionSetup();
+
+          const result = await service.validateProposedTrade(
+            'user-1',
+            tradeWithFivePipStop(freshQuote),
+          );
+
+          expect(result.decision).toBe('REJECTED');
+          if (result.decision === 'REJECTED') {
+            expect(result.rejectionCode).toBe(RiskRejectionCode.INVALID_SL_DISTANCE);
+            expect(result.rejectionReason).toContain(`${expectedPips} pips is below minimum`);
+            expect(result.rejectionReason).toContain('EURUSD');
+          }
+        },
+      );
+
+      it('LIVE rejection reports a precise, actionable operator reason', async () => {
+        liveConnectionSetup();
+
+        const result = await service.validateProposedTrade(
+          'user-1',
+          tradeWithFivePipStop('1.07994'),
+        );
+
+        expect(result.decision).toBe('REJECTED');
+        if (result.decision === 'REJECTED') {
+          expect(result.rejectionCode).toBe(RiskRejectionCode.INVALID_SL_DISTANCE);
+          // The message carries the measured distance, the configured floor
+          // and the instrument — actionable without any database query.
+          expect(result.rejectionReason).toBe(
+            'Stop-loss distance 4.4 pips is below minimum 5 pips for EURUSD',
+          );
+        }
+      });
+
+      it('DEMO allocation-aware rebase preserves the intended 5.0-pip distance on the same quote', async () => {
+        brokerService.findConnectionById.mockResolvedValue(
+          defaultConnection({ accountType: 'DEMO' }),
+        );
+        sessionRepo.findOne.mockResolvedValue(
+          defaultSession({ executionMode: ExecutionMode.FULL_AUTO }),
+        );
+        sessionResolution.resolveActiveSessionAuthority.mockResolvedValue({
+          sessionId: 'session-1',
+          sessionGeneration: 1,
+          executionMode: ExecutionMode.FULL_AUTO,
+          brokerConnectionId: 'conn-1',
+        });
+
+        const trade = tradeWithFivePipStop('1.07994');
+        trade.allocationAwarePaperSizing = true;
+        trade.paperMarketReferenceEntryPrice = referenceClose;
+
+        const result = await service.validateProposedTrade('user-1', trade);
+
+        expect(result.decision).toBe('APPROVED');
+        if (result.decision === 'APPROVED') {
+          expect(result.appliedRules).toContain('DEMO_MARKET_GEOMETRY:REBASED');
+          expect(result.appliedRules).toContain('SL_DISTANCE:MARKET_QUOTE_OK');
+        }
+      });
     });
   });
 

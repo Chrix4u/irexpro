@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { CTRADER_FAMILY_BROKER_IDS } from '../broker/registry/broker-catalog';
+import { EXTERNAL_IREXPRO_STRATEGY_CODES } from '../strategy/server-m1-signal-origin';
 import { DEMO_SIX_PAIR_ENTRY_INSTRUMENTS_V2 } from './demo-focused-instruments';
 import {
   toDemoFocusedEntryDiagnostic,
@@ -1486,7 +1487,7 @@ export class M1TacticalEvidenceService {
           AND t.instrument = $3
           AND t.direction = $4
           AND d.governance -> 'multimodelEnsemble' ->> 'strategyRoute' = $5
-          AND ti.strategy_code = 'external-irexpro-multimodel-ensemble'
+          AND ti.strategy_code = '${EXTERNAL_IREXPRO_STRATEGY_CODES.primaryEnsemble}'
           AND ti.timeframe = 'M1'
           AND ti.metadata ->> 'external_provider_paper_only' = 'true'
           AND t.status = 'CLOSED'
@@ -1656,7 +1657,7 @@ export class M1TacticalEvidenceService {
           AND t.broker_connection_id = $2
           AND t.instrument = $3
           AND t.direction = $4
-          AND ti.strategy_code IN ('external-irexpro-m1-tactical', 'external-irexpro-multimodel-ensemble')
+          AND ti.strategy_code IN ('${EXTERNAL_IREXPRO_STRATEGY_CODES.legacyM1Tactical}', '${EXTERNAL_IREXPRO_STRATEGY_CODES.primaryEnsemble}')
           AND ti.timeframe = 'M1'
           AND ti.metadata ->> 'external_provider_paper_only' = 'true'
           AND t.status = 'CLOSED'
@@ -1820,8 +1821,8 @@ export class M1TacticalEvidenceService {
             AND t.instrument=$3 AND t.direction=$4
             AND ti.timeframe='M1'
             AND ti.strategy_code IN (
-              'external-irexpro-m1-tactical',
-              'external-irexpro-multimodel-ensemble'
+              '${EXTERNAL_IREXPRO_STRATEGY_CODES.legacyM1Tactical}',
+              '${EXTERNAL_IREXPRO_STRATEGY_CODES.primaryEnsemble}'
             )
         ), protected_events AS (
           SELECT t.closed_at event_at
@@ -2285,7 +2286,7 @@ export class M1TacticalEvidenceService {
             AND ti.broker_connection_id = $2
             AND ti.instrument = $3
             AND ti.direction = $4
-            AND ti.strategy_code IN ('external-irexpro-m1-tactical', 'external-irexpro-multimodel-ensemble')
+            AND ti.strategy_code IN ('${EXTERNAL_IREXPRO_STRATEGY_CODES.legacyM1Tactical}', '${EXTERNAL_IREXPRO_STRATEGY_CODES.primaryEnsemble}')
             AND ti.timeframe = 'M1'
             AND (
               ti.status = 'CREATED'

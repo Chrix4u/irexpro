@@ -29,25 +29,13 @@ import {
 } from '../broker/services/broker-account-snapshot.service';
 import { BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { isCurrentFocusedDemoEntryInstrument } from '../ai/demo-focused-instruments';
-import { isStrictLiveM1PrimarySignal } from './server-m1-signal-origin';
+import {
+  evaluateM1PrimaryModelDecision,
+  hasServerM1Origin,
+  isServerPromotedExternalDemoModel,
+  isStrictLiveM1PrimarySignal,
+} from './server-m1-signal-origin';
 
-/**
- * Server-side DEMO promotion allowlist. Transport metadata can never grant
- * this authority: only an exact frozen strategy/model/timeframe tuple can
- * cross from the external evidence feed onto a real-provider DEMO account.
- * LIVE remains governed by the separate production verification boundary.
- */
-const PROMOTED_EXTERNAL_DEMO_MODELS = new Set([
-  'external-irexpro-m1-tactical|external-provider/irexpro-m1-tactical/m1-tactical-v1|M1',
-  'external-irexpro-m1-tactical|external-provider/irexpro-m1-tactical/m1-tactical-v2-m5-lifecycle|M1',
-  'external-irexpro-multimodel-ensemble|external-provider/irexpro-multimodel-ensemble-v1/demo-v1|M1',
-]);
-
-function isServerPromotedExternalDemoModel(candidate: AiSignalCandidate): boolean {
-  return PROMOTED_EXTERNAL_DEMO_MODELS.has(
-    `${candidate.strategyCode ?? ''}|${candidate.modelVersion ?? ''}|${candidate.timeframe ?? ''}`,
-  );
-}
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
 import { SharedControlRevisionService } from '../execution-authority/shared-control-revision.service';
@@ -340,6 +328,31 @@ export class StrategyOrchestratorService {
           'SIGNAL_INVALID',
           'EXTERNAL_PROVIDER_PAPER_ONLY',
           reason,
+          {
+            admissionDiagnostics: {
+              accountMode: paperConnection?.accountType ?? 'UNKNOWN',
+              primaryModelDecision: evaluateM1PrimaryModelDecision(candidate),
+              serverOriginVerified: hasServerM1Origin(candidate),
+              demoModelRecognized: isServerPromotedExternalDemoModel(candidate),
+              executionMode: session.executionMode,
+              connectionBindingMatches: candidate.brokerConnectionId === session.brokerConnectionId,
+              accountAuthorizationActive: paperConnection?.authorizationStatus === 'ACTIVE',
+              liveTradingEnabled: paperConnection?.liveTradingEnabled === true,
+              // Per-leg LIVE certification boundary probes (diagnostics only):
+              // lets an operator see exactly which leg of the narrow LIVE
+              // admission boundary failed when the model decision itself was
+              // QUALIFIED — e.g. continuous scanning without executions.
+              liveBoundaryChecks: {
+                sessionFullAuto: session.executionMode === ExecutionMode.FULL_AUTO,
+                brokerIdMatches: paperConnection?.brokerId === 'pepperstone-ctrader',
+                accountTypeIsLive: paperConnection?.accountType === BrokerMode.LIVE,
+                providerIdentityMatches: paperConnection?.providerBrokerIdentity === 'pepperstone',
+                statusConnected: paperConnection?.status === 'CONNECTED',
+                productionLiveEligible:
+                  this.brokerService.isProductionLiveEligible?.('pepperstone-ctrader') === true,
+              },
+            },
+          },
         );
         return { outcome: 'SIGNAL_INVALID', signalId, reason };
       }
