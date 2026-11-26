@@ -191,6 +191,21 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify offline V2 evaluation-metrics research (win rate never gates)
+        run: node --test apps/api/scripts/research/v2-evaluation-metrics.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify offline V2 champion-challenger attribution invariants
+        run: node --test apps/api/scripts/research/v2-champion-challenger-attribution.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify offline V2 decision-record contract invariants
+        run: node --test apps/api/scripts/research/v2-decision-record-contract.test.cjs
+        env:
+          NODE_ENV: test
+
       - name: Verify OOD broker-native path research scopes active Pepperstone DEMO
         run: node --test apps/api/scripts/audit-ood-regime-shadow.test.cjs
         env:
@@ -223,6 +238,46 @@ jobs:
 
       - name: Verify unmatched-deal historical reconciliation over the genuine statement corpus
         run: node --test apps/api/scripts/audit-unmatched-deal-historical-reconciliation.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 Challenger evaluation metrics stay offline and deterministic
+        run: node --test apps/api/scripts/research/v2-settled-trade-economics.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 Challenger cost-first admission never grants execution authority
+        run: node --test apps/api/scripts/research/v2-challenger-admission.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 paired champion-challenger comparison refuses unpaired evidence
+        run: node --test apps/api/scripts/research/v2-paired-champion-challenger.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 DEMO isolation topology validator enforces the six requirements
+        run: node --test apps/api/scripts/research/v2-demo-isolation-topology.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 decision-record JSON schema composes with the semantic contract
+        run: node --test apps/api/scripts/research/v2-decision-record-schema.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 calibrator bundles are SHA-pinned and load-time verified
+        run: node --test apps/api/scripts/research/v2-calibrator-bundle.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 purged chronological calibration refuses leakage and unsorted evidence
+        run: node --test apps/api/scripts/research/v2-purged-calibration.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 hold-vs-close shadow protocol stays pre-registered and descriptive-only
+        run: node --test apps/api/scripts/research/v2-hold-vs-close-shadow.test.cjs
         env:
           NODE_ENV: test
 

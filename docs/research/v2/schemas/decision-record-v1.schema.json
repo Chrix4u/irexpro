@@ -1,0 +1,146 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://irexpro.internal/research/v2/schemas/decision-record-v1.json",
+  "title": "iRexPro AI V2 decision record (research contract C1-C6)",
+  "description": "Machine-readable canonical form of the V2 decision-record contract. Structural encoding of invariants C1-C6: one confidence field (additionalProperties:false rejects any second confidence-named key), the six uncertainty slots, as-of provenance with supersede counter, commission-inclusive economics, explicit drift state, policy-layer reference by hash. Semantic checks beyond this schema (e.g. C1 sizing rules on uncalibrated confidence) live in v2-decision-record-contract.cjs; a record is valid only when BOTH the schema and the contract pass. Research-only artifact; no runtime path consumes it.",
+  "version": "V2_DECISION_RECORD_V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "decisionRecordSchema",
+    "decisionId",
+    "confidence",
+    "uncertaintySlots",
+    "evidenceProvenance",
+    "executionIntent",
+    "driftState",
+    "policyVersionSha"
+  ],
+  "properties": {
+    "decisionRecordSchema": {
+      "const": "V2_DECISION_RECORD_V1",
+      "description": "Self-declaring schema version; the loader refuses unknown versions."
+    },
+    "decisionId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable identity for supersede chains and outcome linkage (fill -> decision SHA join)."
+    },
+    "instrument": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional but recommended; e.g. EURUSD."
+    },
+    "decisionAt": {
+      "type": "string",
+      "minLength": 10,
+      "description": "Decision-time UTC ISO-8601 instant, recorded before the outcome window."
+    },
+    "confidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "calibration", "calibrationVersion"],
+      "properties": {
+        "value": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "C1: the ONE confidence scalar; semantics fixed as calibrated P(win)."
+        },
+        "calibration": {
+          "enum": ["CALIBRATED", "UNCALIBRATED", "UNKNOWN"],
+          "description": "C1: declared calibration state; uncalibrated values are provenance-only."
+        },
+        "calibrationVersion": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Bundle/pin identifier of the calibrator that produced this value."
+        }
+      }
+    },
+    "uncertaintySlots": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "directionalConfidence",
+        "predictiveUncertainty",
+        "thresholdDistance",
+        "outcomeProbability",
+        "missingEvidence",
+        "mandatoryRiskRestriction"
+      ],
+      "properties": {
+        "directionalConfidence": { "$comment": "measurement object or explicit null", "type": ["object", "null"] },
+        "predictiveUncertainty": { "type": ["object", "null"] },
+        "thresholdDistance": { "type": ["object", "null"] },
+        "outcomeProbability": { "type": ["object", "null"] },
+        "missingEvidence": { "type": ["object", "null"] },
+        "mandatoryRiskRestriction": { "type": ["object", "null"] }
+      },
+      "description": "C2: the six abstention-uncertainty slots stay separate; null means explicitly unknown."
+    },
+    "evidenceProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recordedBeforeOutcome", "supersedeCount", "reconstructed", "asOf"],
+      "properties": {
+        "recordedBeforeOutcome": {
+          "const": true,
+          "description": "C3: decision-time write; false means the record is retrospective and must be flagged."
+        },
+        "supersedeCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "C3/P6: re-evaluations are counted, never silently dropped (V1 first-write-wins defect)."
+        },
+        "reconstructed": {
+          "type": "boolean",
+          "description": "C3: true flags retrospective reconstruction; it is recorded, not accepted silently."
+        },
+        "asOf": {
+          "type": "string",
+          "minLength": 10,
+          "description": "UTC ISO-8601 as-of instant of the evidence snapshot."
+        }
+      }
+    },
+    "afterCostEconomics": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["expectedNetR", "costModelVersion", "includesCommission"],
+          "properties": {
+            "expectedNetR": {
+              "type": "number",
+              "description": "C4: after-cost expected-R; required for EXECUTE, null for non-executable records."
+            },
+            "costModelVersion": {
+              "type": "string",
+              "minLength": 1,
+              "description": "C4: versioned cost model so the V1 3x cost understatement is attributable."
+            },
+            "includesCommission": {
+              "const": true,
+              "description": "C4: spread-only cost models are rejected."
+            }
+          }
+        }
+      ]
+    },
+    "executionIntent": {
+      "enum": ["EXECUTE", "ABSTAIN", "SUPERSEDED"],
+      "description": "SUPERSEDED records stay in the append-only ledger with their supersede count."
+    },
+    "driftState": {
+      "enum": ["NORMAL", "STRESSED", "OUT_OF_DISTRIBUTION"],
+      "description": "C5: explicit drift input; OOD is recorded as OOD, never re-labelled."
+    },
+    "policyVersionSha": {
+      "type": "string",
+      "minLength": 8,
+      "description": "C6: hash of the versioned policy layer that owns all permissions; no inline carve-outs."
+    }
+  }
+}
