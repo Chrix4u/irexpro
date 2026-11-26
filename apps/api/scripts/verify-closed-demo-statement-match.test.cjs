@@ -276,3 +276,32 @@ test('single-field diagnostic never chooses between competing candidate trades o
   assert.deepEqual(summarizeUnmatchedEconomics(competingDeals).reasonCounts, { AMBIGUOUS_SINGLE_FIELD_CANDIDATES: 2 });
   assert.equal(competingDeals.matched.length, 0);
 });
+
+test('accepts native UTC Deals CSV with nonbreaking-space quantity and balances', () => {
+  const { parseStatementInput } = require('./verify-closed-demo-statement-match.cjs');
+  const raw = [
+    'Deals',
+    'Symbol,Opening direction,Closing time (UTC+0),Entry price,Closing price,Closing quantity,Net USD,Balance USD',
+    'EURUSD,Buy,03 Jan 2026 12:00:00.001,1.10,1.20,1.25\u00a0Lots,12.34,1\u00a0000.00',
+    'GBPUSD,Sell,03 Jan 2026 13:00:00.002,1.20,1.10,0.5\u00a0Lots,-2.34,997.66',
+    ',,,,,,10.00,',
+    '',
+    'Summary',
+    'Deposit,Withdrawal,Total net,Equity',
+  ].join('\r\n');
+  const rows = parseStatementInput('\uFEFF' + raw);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].day, '2026-01-03');
+  assert.equal(rows[0].lots, '1.25');
+  assert.equal(rows[1].net, '-2.34');
+  assert.match(rows[0].raw, /2026-01-03T12:00:00.001Z/);
+  assert.equal(parseStatementInput(raw.replace('1.25\u00a0Lots', '1.25 Lots')).length, 2);
+  assert.throws(() => parseStatementInput(raw.replace('10.00,', '10.01,')), /DEALS_TOTAL_MISMATCH/);
+  assert.throws(() => parseStatementInput(raw.replace('03 Jan', '31 Feb')), /INVALID_DEAL_UTC_TIMESTAMP/);
+  assert.throws(() => parseStatementInput(raw.replace('0.5\u00a0Lots', '0.5 Units')), /INVALID_DEAL_FORMAT/);
+  assert.throws(() => parseStatementInput(raw.replace('1.10,1.20', '0,1.20')), /INVALID_DEAL_ECONOMICS/);
+  assert.throws(() => parseStatementInput(raw.replace('Net USD', 'Net EUR')), /UNSUPPORTED_DEALS_HEADER/);
+  assert.throws(() => parseStatementInput(raw.split('Summary')[0]), /INCOMPLETE_DEALS_SECTION/);
+  assert.throws(() => parseStatementInput(raw.replace(',,,,,,10.00,', '')), /INCOMPLETE_DEALS_SECTION/);
+  assert.deepEqual(parseStatementInput(fs.readFileSync(FIXTURE, 'utf-8')), parseFingerprints(fs.readFileSync(FIXTURE, 'utf-8')));
+});
