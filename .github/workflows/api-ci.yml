@@ -179,6 +179,9 @@ jobs:
 
       - name: Verify offline M1 abstention margin measurements
         run: node --test apps/api/scripts/research/m1-abstention-margin.test.cjs
+
+      - name: Verify offline historical M1 feature completeness
+        run: node --test apps/api/scripts/research/m1-feature-coverage.test.cjs
         env:
           NODE_ENV: test
 
