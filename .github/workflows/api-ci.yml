@@ -191,6 +191,21 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify offline V2 evaluation-metrics research (win rate never gates)
+        run: node --test apps/api/scripts/research/v2-evaluation-metrics.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify offline V2 champion-challenger attribution invariants
+        run: node --test apps/api/scripts/research/v2-champion-challenger-attribution.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify offline V2 decision-record contract invariants
+        run: node --test apps/api/scripts/research/v2-decision-record-contract.test.cjs
+        env:
+          NODE_ENV: test
+
       - name: Verify OOD broker-native path research scopes active Pepperstone DEMO
         run: node --test apps/api/scripts/audit-ood-regime-shadow.test.cjs
         env:
