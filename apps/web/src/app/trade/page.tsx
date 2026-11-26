@@ -37,8 +37,8 @@ import { mapApiError } from "@/lib/error-mapping";
 import { loadLiveAccountPositions } from "@/lib/live-account";
 import { resolveAiOpenPositionRows } from "@/lib/ai-open-positions";
 import { estimatePepperstoneDemoRoundTripCommission } from "@/lib/open-commission-presentation";
-import { executionPathDiagnostics } from "@/lib/trade-path-diagnostics";
-import { hasPendingClosedTradeSettlement } from "@/lib/closed-trade-settlement";
+import { closedTradePathPresentation } from "@/lib/trade-path-diagnostics";
+import { hasPendingClosedTradeSettlement, missingClosedTradeSettlementFields } from "@/lib/closed-trade-settlement";
 import { detectOwnerDemoLossCluster } from "@/lib/owner-demo-loss-cluster";
 import {
   loadLiveMarketQuote,
@@ -1278,7 +1278,7 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
   const settlementPending = hasPendingClosedTradeSettlement(trade);
   const realized = trade.status === "CLOSED" ? trade.realisedPnl : null;
   const executionReason = executionReasonLabel(trade.executionReasonCode);
-  const pathDiagnostics = executionPathDiagnostics(trade);
+  const { diagnostics: pathDiagnostics, unavailable: pathUnavailable } = closedTradePathPresentation(trade);
   return (
     <article className="ai-activity-row">
       <div className="ai-activity-row__symbol">
@@ -1326,29 +1326,29 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
               : money(trade.realisedPnl, trade.accountCurrency)}
           </strong>
         </div>
-        {pathDiagnostics ? (
+        {pathDiagnostics || pathUnavailable ? (
           <>
             <div>
               <span>Peak P&amp;L</span>
-              <strong>{signedMoney(pathDiagnostics.maxFavorablePnl, trade.accountCurrency)}</strong>
+              <strong>{signedMoney(pathDiagnostics?.maxFavorablePnl, trade.accountCurrency)}</strong>
             </div>
             <div>
               <span>Profit give-back</span>
-              <strong>{money(pathDiagnostics.profitGiveback, trade.accountCurrency)}</strong>
+              <strong>{money(pathDiagnostics?.profitGiveback, trade.accountCurrency)}</strong>
             </div>
             <div>
               <span>Worst excursion</span>
-              <strong>{signedMoney(pathDiagnostics.maxAdversePnl, trade.accountCurrency)}</strong>
+              <strong>{signedMoney(pathDiagnostics?.maxAdversePnl, trade.accountCurrency)}</strong>
             </div>
             <div>
               <span>Path observations</span>
-              <strong>{pathDiagnostics.observationCount?.toLocaleString() ?? "—"}</strong>
+              <strong>{pathDiagnostics?.observationCount?.toLocaleString() ?? "—"}</strong>
             </div>
             <div>
               <span>Peak observed</span>
               <strong>
-                {pathDiagnostics.peakObservedAt
-                  ? formatTimestamp(pathDiagnostics.peakObservedAt)
+                {pathDiagnostics?.peakObservedAt
+                  ? formatTimestamp(pathDiagnostics?.peakObservedAt)
                   : "—"}
               </strong>
             </div>
@@ -1377,11 +1377,17 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
           </strong>
         </div>
       </div>
+      {pathUnavailable && (
+        <p className="ai-activity-row__settlement-note">
+          No measured execution path is available for this closed trade. Peak P&amp;L,
+          worst excursion and give-back cannot be inferred from the closing result.
+        </p>
+      )}
       {settlementPending && (
         <p className="ai-activity-row__settlement-note" role="status">
-          The broker has reported this position closed, but its final exit price,
-          realized profit or loss, and/or charges are not yet verified. Its peak
-          floating P&amp;L is not realized profit; missing amounts are not zero.
+          Broker settlement incomplete. Missing: {missingClosedTradeSettlementFields(trade).join(", ")}.
+          {" "}Closing record: {formatTimestamp(trade.closedAt)}. Its peak floating
+          P&amp;L is not realized profit; missing amounts are not zero.
         </p>
       )}
       {executionReason && (

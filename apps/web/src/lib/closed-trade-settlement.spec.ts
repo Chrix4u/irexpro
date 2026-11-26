@@ -1,4 +1,4 @@
-import { hasPendingClosedTradeSettlement } from './closed-trade-settlement';
+import { hasPendingClosedTradeSettlement, missingClosedTradeSettlementFields } from './closed-trade-settlement';
 
 const complete = {
   status: 'CLOSED',
@@ -29,5 +29,31 @@ describe('broker-closed positions with pending financial settlement', () => {
         ...complete,status,exitPrice:null,realisedPnl:null,commission:null,
       })).toBe(false);
     }
+  });
+});
+
+describe('missingClosedTradeSettlementFields', () => {
+  it('lists only missing broker values', () => {
+    expect(missingClosedTradeSettlementFields({
+      ...complete,
+      exitPrice: null,
+      swap: null,
+    })).toEqual(['exit price', 'swap']);
+  });
+
+  it('distinguishes genuine zero amounts from missing values', () => {
+    expect(missingClosedTradeSettlementFields({
+      ...complete,
+      realisedPnl: '0',
+      commission: '0',
+    })).toEqual([]);
+  });
+
+  it('does not report pending settlement for an open trade', () => {
+    expect(missingClosedTradeSettlementFields({
+      ...complete,
+      status: 'OPEN',
+      exitPrice: null,
+    })).toEqual([]);
   });
 });
