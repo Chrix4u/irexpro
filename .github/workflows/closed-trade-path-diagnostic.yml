@@ -40,9 +40,16 @@ jobs:
           psql -X -v ON_ERROR_STOP=1 -f docs/operations/tests/closed-trade-path-coverage-fixture.sql
           psql -X -qAt -v ON_ERROR_STOP=1 -f docs/operations/closed-trade-path-coverage.sql > actual.txt
           cat > expected.txt <<'EOF'
+          CLOSED|NATIVE_POSITION_STORED|NO_MEASURED_PATH|2|1|1|1|0
+          CLOSED|NATIVE_POSITION_STORED|PARTIAL_PATH_EVIDENCE|1|1|0|0|1
+          CLOSED|NATIVE_POSITION_STORED|SAMPLES_AND_ALL_METRICS|1|0|0|0|0
           OPEN|AMBIGUOUS_LINK|NO_MEASURED_PATH|1|0|0|0|0
           OPEN|EXACT_LINK_DISTINCT_FROM_ORDER|NO_MEASURED_PATH|1|0|0|0|0
           OPEN|INVALID_LINK|NO_MEASURED_PATH|1|0|0|0|0
           OPEN|ORDER_ONLY_NO_EXACT_LINK|NO_MEASURED_PATH|1|0|0|0|0
+          NO_CLOSURE_AUDIT|UNSPECIFIED|1|0|0|0|0|0|0|0
+          SYNTHETIC|AUDIT_ONLY|1|1|0|1|1|1|1|1
+          SYNTHETIC|DURABLE|1|1|1|0|0|0|0|0
+          SYNTHETIC|UNSPECIFIED|1|0|1|0|0|0|0|1
           EOF
           diff -u expected.txt actual.txt

@@ -44,3 +44,25 @@ INSERT INTO trading.orders VALUES
 ('invalid','u','c','MARKET','FILLED','13','0','EURUSD','BUY',1,1.1),
 ('cross-owner','other','c','MARKET','FILLED','14','24','EURUSD','BUY',1,1.1),
 ('foreign-order','other','c','MARKET','FILLED','15','25','EURUSD','BUY',1,1.1);
+
+-- Closed-trade telemetry and settlement are independent evidence dimensions.
+INSERT INTO trading.trades
+(id,user_id,broker_connection_id,signal_id,opened_at,closed_at,status,
+ external_position_id,instrument,direction,lot_size,fill_price,
+ path_observation_count,max_favorable_pnl,max_adverse_pnl,profit_giveback,
+ path_last_observed_at,exit_price,realised_pnl,commission,swap)
+VALUES
+('complete','u','c','s',now()-interval '1 hour',now()-interval '30 minutes','CLOSED',
+ '31','EURUSD','BUY',1,1.1,5,20,-5,2,now()-interval '31 minutes',1.2,18,0,0),
+('audit-only','u','c','s',now()-interval '1 hour',now()-interval '30 minutes','CLOSED',
+ '32','EURUSD','BUY',1,1.1,0,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+('partial','u','c','s',now()-interval '1 hour',now()-interval '10 minutes','CLOSED',
+ '33','EURUSD','BUY',1,1.1,2,5,NULL,NULL,now()-interval '9 minutes',1.2,4,0,NULL),
+('no-audit','u','c','s',now()-interval '1 hour',now()-interval '1 hour'+interval '2 seconds','CLOSED',
+ '34','EURUSD','BUY',1,1.1,0,NULL,NULL,NULL,NULL,1.2,10,0,0);
+INSERT INTO audit.audit_logs VALUES
+('a-complete','Trade','complete','TRADE_CLOSED',
+ '{"source":"SYNTHETIC","pathDiagnosticsSource":"DURABLE","pathDiagnostics":{}}',now()),
+('a-only','Trade','audit-only','TRADE_CLOSED',
+ '{"source":"SYNTHETIC","pathDiagnosticsSource":"AUDIT_ONLY","pathDiagnostics":{}}',now()),
+('a-partial','Trade','partial','TRADE_CLOSED','{"source":"SYNTHETIC"}',now());
