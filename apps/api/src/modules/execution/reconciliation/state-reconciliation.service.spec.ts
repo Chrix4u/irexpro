@@ -405,7 +405,7 @@ describe('StateReconciliationService', () => {
     );
   });
 
-  it('Pepperstone DEMO closed-order recovery uses authentic DealList + domain fill only', async () => {
+  it.each([false, true])('Pepperstone DEMO closed-order recovery uses authentic DealList + domain fill only (distinct native ID=%s)', async (distinct) => {
     const previous = process.env.VPS_FOREX_SCANNER_USER_ID;
     process.env.VPS_FOREX_SCANNER_USER_ID = 'user-1';
     try {
@@ -422,6 +422,7 @@ describe('StateReconciliationService', () => {
         openedAt: opened,
         closedAt: closed,
         externalOrderId: '8422910',
+        fillPrice: '1.43798',
         lotSize: '2.8000',
         exitPrice: '1.43767000',
         realisedPnl: '60.38000000',
@@ -441,7 +442,7 @@ describe('StateReconciliationService', () => {
         submittedAt: sent,
       };
       const deal = {
-        externalOrderId: '8422910',
+        externalOrderId: distinct ? '9422910' : '8422910',
         instrument: 'USDCAD',
         direction: 'BUY',
         lotSize: '2.8',
@@ -458,7 +459,19 @@ describe('StateReconciliationService', () => {
         providerDealId: '6860122',
         providerNativeOrderId: '7695022',
       };
-      orderRepo.find.mockResolvedValue([orphan]);
+      const linked = {
+        ...pendingOrder(),
+        tradeId: terminal.id,
+        providerOrderId: terminal.externalOrderId,
+        providerPositionId: '9422910',
+        orderKind: OrderKind.MARKET,
+        status: OrderStatus.FILLED,
+        instrument: terminal.instrument,
+        direction: terminal.direction,
+        filledQuantity: terminal.lotSize,
+        avgFillPrice: terminal.fillPrice,
+      };
+      orderRepo.find.mockResolvedValueOnce([orphan]).mockResolvedValue(distinct ? [linked] : []);
       tradeRepo.findOne.mockResolvedValue(terminal);
       adapter.getClosedTrades.mockResolvedValue([deal]);
       orderService.applyFill.mockResolvedValue({ ...orphan, status: OrderStatus.FILLED });
@@ -485,13 +498,14 @@ describe('StateReconciliationService', () => {
           // Closing-order identity, three separate native ids from the proof:
           // the native ORDER id (deal.orderId), the POSITION id and the DEAL id.
           providerOrderId: '7695022',
-          providerPositionId: '8422910',
+          providerPositionId: distinct ? '9422910' : '8422910',
           providerDealId: '6860122',
         },
         // Deal-grade delivery (native deal id present): deduplicated by the
         // ledger, never fenced.
         {},
       );
+      expect(terminal.externalPositionId).toBeNull();
       expect(adapter.modifyOrder).not.toHaveBeenCalled();
       expect(persistence.resolveDiscrepanciesByRef).toHaveBeenCalled();
     } finally {
@@ -500,7 +514,7 @@ describe('StateReconciliationService', () => {
     }
   });
 
-  it('aged cTrader DEMO close-order recovery converges a two-week-old stranded order', async () => {
+  it.each([false, true])('aged cTrader DEMO close-order recovery converges a two-week-old stranded order (distinct native ID=%s)', async (distinct) => {
     const previous = process.env.VPS_FOREX_SCANNER_USER_ID;
     delete process.env.VPS_FOREX_SCANNER_USER_ID; // aged sweep must not need it
     try {
@@ -517,6 +531,7 @@ describe('StateReconciliationService', () => {
         openedAt: opened,
         closedAt: closed,
         externalOrderId: '8422910',
+        fillPrice: '1.43798',
         lotSize: '2.8000',
         exitPrice: '1.43767000',
         realisedPnl: '60.38000000',
@@ -536,7 +551,7 @@ describe('StateReconciliationService', () => {
         submittedAt: sent,
       };
       const deal = {
-        externalOrderId: '8422910',
+        externalOrderId: distinct ? '9422910' : '8422910',
         instrument: 'EURUSD',
         direction: 'BUY',
         lotSize: '2.8',
@@ -553,7 +568,19 @@ describe('StateReconciliationService', () => {
         providerDealId: '6860122',
         providerNativeOrderId: '7695022',
       };
-      orderRepo.find.mockResolvedValue([orphan]);
+      const linked = {
+        ...pendingOrder(),
+        tradeId: terminal.id,
+        providerOrderId: terminal.externalOrderId,
+        providerPositionId: '9422910',
+        orderKind: OrderKind.MARKET,
+        status: OrderStatus.FILLED,
+        instrument: terminal.instrument,
+        direction: terminal.direction,
+        filledQuantity: terminal.lotSize,
+        avgFillPrice: terminal.fillPrice,
+      };
+      orderRepo.find.mockResolvedValueOnce([orphan]).mockResolvedValue(distinct ? [linked] : []);
       tradeRepo.find.mockResolvedValue([]);
       tradeRepo.findOne.mockResolvedValue(terminal);
       adapter.getClosedTrades.mockResolvedValue([deal]);
@@ -574,13 +601,14 @@ describe('StateReconciliationService', () => {
           price: '1.43767',
           // Closing-order identity, three separate native ids from the proof.
           providerOrderId: '7695022',
-          providerPositionId: '8422910',
+          providerPositionId: distinct ? '9422910' : '8422910',
           providerDealId: '6860122',
         },
         // Deal-grade delivery (native deal id present): deduplicated by the
         // ledger, never fenced.
         {},
       );
+      expect(terminal.externalPositionId).toBeNull();
       expect(adapter.modifyOrder).not.toHaveBeenCalled();
     } finally {
       if (previous === undefined) delete process.env.VPS_FOREX_SCANNER_USER_ID;
