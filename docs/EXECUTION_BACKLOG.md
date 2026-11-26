@@ -202,3 +202,10 @@ All items below are open engineering work unless explicitly supported by a linke
 - #829 functional tests passed on `f1c41b6`; final lint annotation corrected in `b3a86f50`. Latest checkpoint overlap with #830 resolved in `2ce3488c`. Verify latest required CI and mergeability, not earlier check status.
 - MOB-04/05: #831 implements a compact dashboard and explicit unavailable/checking/conflicting readiness display, discards superseded refresh responses and adds pure presentation tests. Current candidate `210d9fb7`; mobile CI and physical device verification remain outstanding. No server trading authorization changed.
 - Resume: verify #829/#831 latest CI, account for unresolved historical reconciliation, then continue independent mobile/web acceptance and release review. No deployment performed.
+
+### Checkpoint — verified accounting tests and mobile acceptance
+
+- #829 merged (`82ec173f`) after 15 executed CI checks passed, including API tests/build and PostgreSQL concurrency; full API lint audit skipped. ACC-01 source contract regression verified, historical settlement/runtime validation remains open.
+- #831 merged (`87a58926`) after nine CI checks passed, including native mobile typecheck/bundle and installable Android preview APK ([CI run](https://github.com/Chrix4u/irexpro/actions/runs/45842396552)). MOB-04/05 dashboard presentation correction verified in CI; physical-device verification remains open. APK is a preview build, not a store-certified release.
+- #832 shared dialog accessibility candidate: scrollable content, bounded height, wrapping action buttons, busy-state semantics and reduced-motion support. Mobile CI pending. Test on small Android/iOS screens, landscape and enlarged system text; verify long details scroll, buttons remain reachable, busy dialogs cannot be dismissed, and reduced motion disables transition. Do not mark on-device acceptance complete without evidence.
+- Resume: verify #832 latest CI; continue MOB-04/05 and MOB-03 acceptance. Historical statement reconciliation and release authorization remain outstanding; no financial record or trading authority changes, and no VPS deployment in this session.
