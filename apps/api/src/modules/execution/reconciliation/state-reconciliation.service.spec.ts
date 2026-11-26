@@ -405,216 +405,222 @@ describe('StateReconciliationService', () => {
     );
   });
 
-  it.each([false, true])('Pepperstone DEMO closed-order recovery uses authentic DealList + domain fill only (distinct native ID=%s)', async (distinct) => {
-    const previous = process.env.VPS_FOREX_SCANNER_USER_ID;
-    process.env.VPS_FOREX_SCANNER_USER_ID = 'user-1';
-    try {
-      const now = Date.now();
-      const opened = new Date(now - 10 * 60_000);
-      const sent = new Date(now - 2 * 60_000 - 1000);
-      const closed = new Date(now - 2 * 60_000);
-      const terminal = {
-        ...openTrade(),
-        id: 'closed-trade-1',
-        status: TradeStatus.CLOSED,
-        instrument: 'USDCAD',
-        direction: TradeDirection.SELL,
-        openedAt: opened,
-        closedAt: closed,
-        externalOrderId: '8422910',
-        fillPrice: '1.43798',
-        lotSize: '2.8000',
-        exitPrice: '1.43767000',
-        realisedPnl: '60.38000000',
-      };
-      const orphan = {
-        ...pendingOrder(),
-        id: 'close-order-1',
-        tradeId: 'closed-trade-1',
-        providerOrderId: null,
-        orderKind: 'MARKET',
-        instrument: 'USDCAD',
-        direction: TradeDirection.BUY,
-        requestedQuantity: '2.8000',
-        filledQuantity: '0.0000',
-        avgFillPrice: null,
-        createdAt: new Date(sent.getTime() - 75),
-        submittedAt: sent,
-      };
-      const deal = {
-        externalOrderId: distinct ? '9422910' : '8422910',
-        instrument: 'USDCAD',
-        direction: 'BUY',
-        lotSize: '2.8',
-        openPrice: '1.43798',
-        closePrice: '1.43767',
-        stopLoss: '0',
-        takeProfit: '0',
-        realisedPnl: '60.38',
-        openedAt: closed,
-        closedAt: closed,
-        commission: '-8.40',
-        swap: '0',
-        closeReason: 'UNKNOWN',
-        providerDealId: '6860122',
-        providerNativeOrderId: '7695022',
-      };
-      const linked = {
-        ...pendingOrder(),
-        tradeId: terminal.id,
-        providerOrderId: terminal.externalOrderId,
-        providerPositionId: '9422910',
-        orderKind: OrderKind.MARKET,
-        status: OrderStatus.FILLED,
-        instrument: terminal.instrument,
-        direction: terminal.direction,
-        filledQuantity: terminal.lotSize,
-        avgFillPrice: terminal.fillPrice,
-      };
-      orderRepo.find.mockResolvedValueOnce([orphan]).mockResolvedValue(distinct ? [linked] : []);
-      tradeRepo.findOne.mockResolvedValue(terminal);
-      adapter.getClosedTrades.mockResolvedValue([deal]);
-      orderService.applyFill.mockResolvedValue({ ...orphan, status: OrderStatus.FILLED });
-      await service.runForConnection({
-        ...connection(),
-        brokerId: 'pepperstone-ctrader',
-      } as BrokerConnection);
-      expect(tradeRepo.findOne).toHaveBeenCalledWith({
-        where: expect.objectContaining({
+  it.each([false, true])(
+    'Pepperstone DEMO closed-order recovery uses authentic DealList + domain fill only (distinct native ID=%s)',
+    async (distinct) => {
+      const previous = process.env.VPS_FOREX_SCANNER_USER_ID;
+      process.env.VPS_FOREX_SCANNER_USER_ID = 'user-1';
+      try {
+        const now = Date.now();
+        const opened = new Date(now - 10 * 60_000);
+        const sent = new Date(now - 2 * 60_000 - 1000);
+        const closed = new Date(now - 2 * 60_000);
+        const terminal = {
+          ...openTrade(),
           id: 'closed-trade-1',
           status: TradeStatus.CLOSED,
-        }),
-      });
-      expect(adapter.getClosedTrades).toHaveBeenCalledWith(
-        new Date(opened.getTime() - 60_000),
-        expect.any(Date),
-      );
-      expect(orderService.applyFill).toHaveBeenCalledTimes(1);
-      expect(orderService.applyFill).toHaveBeenCalledWith(
-        'close-order-1',
-        {
-          quantity: '2.8000',
-          price: '1.43767',
-          // Closing-order identity, three separate native ids from the proof:
-          // the native ORDER id (deal.orderId), the POSITION id and the DEAL id.
-          providerOrderId: '7695022',
-          providerPositionId: distinct ? '9422910' : '8422910',
+          instrument: 'USDCAD',
+          direction: TradeDirection.SELL,
+          openedAt: opened,
+          closedAt: closed,
+          externalOrderId: '8422910',
+          fillPrice: '1.43798',
+          lotSize: '2.8000',
+          exitPrice: '1.43767000',
+          realisedPnl: '60.38000000',
+        };
+        const orphan = {
+          ...pendingOrder(),
+          id: 'close-order-1',
+          tradeId: 'closed-trade-1',
+          providerOrderId: null,
+          orderKind: 'MARKET',
+          instrument: 'USDCAD',
+          direction: TradeDirection.BUY,
+          requestedQuantity: '2.8000',
+          filledQuantity: '0.0000',
+          avgFillPrice: null,
+          createdAt: new Date(sent.getTime() - 75),
+          submittedAt: sent,
+        };
+        const deal = {
+          externalOrderId: distinct ? '9422910' : '8422910',
+          instrument: 'USDCAD',
+          direction: 'BUY',
+          lotSize: '2.8',
+          openPrice: '1.43798',
+          closePrice: '1.43767',
+          stopLoss: '0',
+          takeProfit: '0',
+          realisedPnl: '60.38',
+          openedAt: closed,
+          closedAt: closed,
+          commission: '-8.40',
+          swap: '0',
+          closeReason: 'UNKNOWN',
           providerDealId: '6860122',
-        },
-        // Deal-grade delivery (native deal id present): deduplicated by the
-        // ledger, never fenced.
-        {},
-      );
-      expect(terminal.externalPositionId).toBeNull();
-      expect(adapter.modifyOrder).not.toHaveBeenCalled();
-      expect(persistence.resolveDiscrepanciesByRef).toHaveBeenCalled();
-    } finally {
-      if (previous === undefined) delete process.env.VPS_FOREX_SCANNER_USER_ID;
-      else process.env.VPS_FOREX_SCANNER_USER_ID = previous;
-    }
-  });
+          providerNativeOrderId: '7695022',
+        };
+        const linked = {
+          ...pendingOrder(),
+          tradeId: terminal.id,
+          providerOrderId: terminal.externalOrderId,
+          providerPositionId: '9422910',
+          orderKind: OrderKind.MARKET,
+          status: OrderStatus.FILLED,
+          instrument: terminal.instrument,
+          direction: terminal.direction,
+          filledQuantity: terminal.lotSize,
+          avgFillPrice: terminal.fillPrice,
+        };
+        orderRepo.find.mockResolvedValueOnce([orphan]).mockResolvedValue(distinct ? [linked] : []);
+        tradeRepo.findOne.mockResolvedValue(terminal);
+        adapter.getClosedTrades.mockResolvedValue([deal]);
+        orderService.applyFill.mockResolvedValue({ ...orphan, status: OrderStatus.FILLED });
+        await service.runForConnection({
+          ...connection(),
+          brokerId: 'pepperstone-ctrader',
+        } as BrokerConnection);
+        expect(tradeRepo.findOne).toHaveBeenCalledWith({
+          where: expect.objectContaining({
+            id: 'closed-trade-1',
+            status: TradeStatus.CLOSED,
+          }),
+        });
+        expect(adapter.getClosedTrades).toHaveBeenCalledWith(
+          new Date(opened.getTime() - 60_000),
+          expect.any(Date),
+        );
+        expect(orderService.applyFill).toHaveBeenCalledTimes(1);
+        expect(orderService.applyFill).toHaveBeenCalledWith(
+          'close-order-1',
+          {
+            quantity: '2.8000',
+            price: '1.43767',
+            // Closing-order identity, three separate native ids from the proof:
+            // the native ORDER id (deal.orderId), the POSITION id and the DEAL id.
+            providerOrderId: '7695022',
+            providerPositionId: distinct ? '9422910' : '8422910',
+            providerDealId: '6860122',
+          },
+          // Deal-grade delivery (native deal id present): deduplicated by the
+          // ledger, never fenced.
+          {},
+        );
+        expect(terminal.externalPositionId).toBeNull();
+        expect(adapter.modifyOrder).not.toHaveBeenCalled();
+        expect(persistence.resolveDiscrepanciesByRef).toHaveBeenCalled();
+      } finally {
+        if (previous === undefined) delete process.env.VPS_FOREX_SCANNER_USER_ID;
+        else process.env.VPS_FOREX_SCANNER_USER_ID = previous;
+      }
+    },
+  );
 
-  it.each([false, true])('aged cTrader DEMO close-order recovery converges a two-week-old stranded order (distinct native ID=%s)', async (distinct) => {
-    const previous = process.env.VPS_FOREX_SCANNER_USER_ID;
-    delete process.env.VPS_FOREX_SCANNER_USER_ID; // aged sweep must not need it
-    try {
-      const now = Date.now();
-      const opened = new Date(now - 14 * 86400_000 - 3600_000);
-      const sent = new Date(now - 14 * 86400_000);
-      const closed = new Date(now - 14 * 86400_000 + 1000);
-      const terminal = {
-        ...openTrade(),
-        id: 'aged-trade-1',
-        status: TradeStatus.CLOSED,
-        instrument: 'EURUSD',
-        direction: TradeDirection.SELL,
-        openedAt: opened,
-        closedAt: closed,
-        externalOrderId: '8422910',
-        fillPrice: '1.43798',
-        lotSize: '2.8000',
-        exitPrice: '1.43767000',
-        realisedPnl: '60.38000000',
-      };
-      const orphan = {
-        ...pendingOrder(),
-        id: 'aged-close-order-1',
-        tradeId: 'aged-trade-1',
-        providerOrderId: null,
-        orderKind: 'MARKET',
-        instrument: 'EURUSD',
-        direction: TradeDirection.BUY,
-        requestedQuantity: '2.8000',
-        filledQuantity: '0.0000',
-        avgFillPrice: null,
-        createdAt: new Date(sent.getTime() - 75),
-        submittedAt: sent,
-      };
-      const deal = {
-        externalOrderId: distinct ? '9422910' : '8422910',
-        instrument: 'EURUSD',
-        direction: 'BUY',
-        lotSize: '2.8',
-        openPrice: '1.43798',
-        closePrice: '1.43767',
-        stopLoss: '0',
-        takeProfit: '0',
-        realisedPnl: '60.38',
-        openedAt: closed,
-        closedAt: closed,
-        commission: '-8.40',
-        swap: '0',
-        closeReason: 'UNKNOWN',
-        providerDealId: '6860122',
-        providerNativeOrderId: '7695022',
-      };
-      const linked = {
-        ...pendingOrder(),
-        tradeId: terminal.id,
-        providerOrderId: terminal.externalOrderId,
-        providerPositionId: '9422910',
-        orderKind: OrderKind.MARKET,
-        status: OrderStatus.FILLED,
-        instrument: terminal.instrument,
-        direction: terminal.direction,
-        filledQuantity: terminal.lotSize,
-        avgFillPrice: terminal.fillPrice,
-      };
-      orderRepo.find.mockResolvedValueOnce([orphan]).mockResolvedValue(distinct ? [linked] : []);
-      tradeRepo.find.mockResolvedValue([]);
-      tradeRepo.findOne.mockResolvedValue(terminal);
-      adapter.getClosedTrades.mockResolvedValue([deal]);
-      orderService.applyFill.mockResolvedValue({ ...orphan, status: OrderStatus.FILLED });
-      await service.runForConnection({
-        ...connection(),
-        brokerId: 'ctrader',
-      } as BrokerConnection);
-      expect(adapter.getClosedTrades).toHaveBeenCalledWith(
-        new Date(opened.getTime() - 60_000),
-        expect.any(Date),
-      );
-      expect(orderService.applyFill).toHaveBeenCalledTimes(1);
-      expect(orderService.applyFill).toHaveBeenCalledWith(
-        'aged-close-order-1',
-        {
-          quantity: '2.8000',
-          price: '1.43767',
-          // Closing-order identity, three separate native ids from the proof.
-          providerOrderId: '7695022',
-          providerPositionId: distinct ? '9422910' : '8422910',
+  it.each([false, true])(
+    'aged cTrader DEMO close-order recovery converges a two-week-old stranded order (distinct native ID=%s)',
+    async (distinct) => {
+      const previous = process.env.VPS_FOREX_SCANNER_USER_ID;
+      delete process.env.VPS_FOREX_SCANNER_USER_ID; // aged sweep must not need it
+      try {
+        const now = Date.now();
+        const opened = new Date(now - 14 * 86400_000 - 3600_000);
+        const sent = new Date(now - 14 * 86400_000);
+        const closed = new Date(now - 14 * 86400_000 + 1000);
+        const terminal = {
+          ...openTrade(),
+          id: 'aged-trade-1',
+          status: TradeStatus.CLOSED,
+          instrument: 'EURUSD',
+          direction: TradeDirection.SELL,
+          openedAt: opened,
+          closedAt: closed,
+          externalOrderId: '8422910',
+          fillPrice: '1.43798',
+          lotSize: '2.8000',
+          exitPrice: '1.43767000',
+          realisedPnl: '60.38000000',
+        };
+        const orphan = {
+          ...pendingOrder(),
+          id: 'aged-close-order-1',
+          tradeId: 'aged-trade-1',
+          providerOrderId: null,
+          orderKind: 'MARKET',
+          instrument: 'EURUSD',
+          direction: TradeDirection.BUY,
+          requestedQuantity: '2.8000',
+          filledQuantity: '0.0000',
+          avgFillPrice: null,
+          createdAt: new Date(sent.getTime() - 75),
+          submittedAt: sent,
+        };
+        const deal = {
+          externalOrderId: distinct ? '9422910' : '8422910',
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          lotSize: '2.8',
+          openPrice: '1.43798',
+          closePrice: '1.43767',
+          stopLoss: '0',
+          takeProfit: '0',
+          realisedPnl: '60.38',
+          openedAt: closed,
+          closedAt: closed,
+          commission: '-8.40',
+          swap: '0',
+          closeReason: 'UNKNOWN',
           providerDealId: '6860122',
-        },
-        // Deal-grade delivery (native deal id present): deduplicated by the
-        // ledger, never fenced.
-        {},
-      );
-      expect(terminal.externalPositionId).toBeNull();
-      expect(adapter.modifyOrder).not.toHaveBeenCalled();
-    } finally {
-      if (previous === undefined) delete process.env.VPS_FOREX_SCANNER_USER_ID;
-      else process.env.VPS_FOREX_SCANNER_USER_ID = previous;
-    }
-  });
+          providerNativeOrderId: '7695022',
+        };
+        const linked = {
+          ...pendingOrder(),
+          tradeId: terminal.id,
+          providerOrderId: terminal.externalOrderId,
+          providerPositionId: '9422910',
+          orderKind: OrderKind.MARKET,
+          status: OrderStatus.FILLED,
+          instrument: terminal.instrument,
+          direction: terminal.direction,
+          filledQuantity: terminal.lotSize,
+          avgFillPrice: terminal.fillPrice,
+        };
+        orderRepo.find.mockResolvedValueOnce([orphan]).mockResolvedValue(distinct ? [linked] : []);
+        tradeRepo.find.mockResolvedValue([]);
+        tradeRepo.findOne.mockResolvedValue(terminal);
+        adapter.getClosedTrades.mockResolvedValue([deal]);
+        orderService.applyFill.mockResolvedValue({ ...orphan, status: OrderStatus.FILLED });
+        await service.runForConnection({
+          ...connection(),
+          brokerId: 'ctrader',
+        } as BrokerConnection);
+        expect(adapter.getClosedTrades).toHaveBeenCalledWith(
+          new Date(opened.getTime() - 60_000),
+          expect.any(Date),
+        );
+        expect(orderService.applyFill).toHaveBeenCalledTimes(1);
+        expect(orderService.applyFill).toHaveBeenCalledWith(
+          'aged-close-order-1',
+          {
+            quantity: '2.8000',
+            price: '1.43767',
+            // Closing-order identity, three separate native ids from the proof.
+            providerOrderId: '7695022',
+            providerPositionId: distinct ? '9422910' : '8422910',
+            providerDealId: '6860122',
+          },
+          // Deal-grade delivery (native deal id present): deduplicated by the
+          // ledger, never fenced.
+          {},
+        );
+        expect(terminal.externalPositionId).toBeNull();
+        expect(adapter.modifyOrder).not.toHaveBeenCalled();
+      } finally {
+        if (previous === undefined) delete process.env.VPS_FOREX_SCANNER_USER_ID;
+        else process.env.VPS_FOREX_SCANNER_USER_ID = previous;
+      }
+    },
+  );
 
   it('aged cTrader DEMO recovery leaves the order pending when the deal evidence mismatches', async () => {
     const previous = process.env.VPS_FOREX_SCANNER_USER_ID;
