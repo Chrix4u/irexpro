@@ -220,3 +220,10 @@ All items below are open engineering work unless explicitly supported by a linke
 - [ ] P0 ACC-08: Verify authenticated DEMO reconciliation outcomes and the dashboard with the deployed exact revision before marking the incident resolved.
 
 Next: finish CI/review of diagnostics and UI, then the read-only statement comparison slice. Runtime and account-specific verification remain open. No financial records or release safeguards were modified by this checkpoint.
+
+### Reconciliation incident execution checkpoint — 2026-11-26
+
+- ACC-07 and ADMIN-02: #842/#843 merged and deployed as part of `b70ba5bb` ([successful guarded deployment](https://github.com/Chrix4u/irexpro/actions/runs/45906916326)). Operator confirmed that the diagnostics panel renders and reports recovery failures. Authenticated settlement acceptance remains open.
+- ADMIN-03: #844/#845 merged and deployed; browser-only statement arithmetic works in operator UAT. This is not broker-versus-ledger comparison or settlement evidence; account-scoped comparison remains outstanding.
+- ACC-08: Operator UAT showed generic local-economic proof rejection and historical recovery exceptions. #847 splits these into precise local-premise and exception-stage codes without altering settlement predicates. Initial stage-only candidate CI passed; latest expanded candidate requires fresh CI, guarded deployment and operator verification. No private statement rows or account IDs are included here.
+- Next: use the specific failure category to obtain authorized, account-scoped source evidence; establish root cause, test an independently reviewed remedy against synthetic regression cases, and verify unresolved counts and financial invariants. Do not infer a settlement from an arithmetic match or bulk-clear warnings. ACC-06 remains gated by provider contract validation. Do not deploy another diagnostic slice merely to accumulate features.
