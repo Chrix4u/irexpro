@@ -1080,6 +1080,56 @@ describe('CTraderAdapter', () => {
   };
 
   describe('getOpenPositions / getPositionById', () => {
+    it('returns independently observed broker P&L without requesting a spot quote', async () => {
+      scriptReconcile([SAMPLE_POSITION], []);
+      server.on(CTRADER_PAYLOAD_TYPE.GET_POSITION_UNREALIZED_PNL_REQ, (payload, envelope) =>
+        echo(
+          CTRADER_PAYLOAD_TYPE.GET_POSITION_UNREALIZED_PNL_RES,
+          {
+            ctidTraderAccountId: payload.ctidTraderAccountId,
+            positionUnrealizedPnL: [
+              { positionId: 7654321, grossUnrealizedPnL: 15000, netUnrealizedPnL: 12345 },
+            ],
+            moneyDigits: 2,
+          },
+          envelope,
+        ),
+      );
+      await connectDemo();
+      expect(await adapter.getOpenPositionDisplay()).toEqual([
+        expect.objectContaining({
+          externalOrderId: '7654321',
+          currentPrice: null,
+          unrealisedPnl: '123.45',
+          markSource: 'PROVIDER',
+          markObservedAt: expect.any(Date),
+        }),
+      ]);
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ)).toBeUndefined();
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)).toBeUndefined();
+    });
+
+    it.each([[], [{ positionId: 7654321, grossUnrealizedPnL: 0, netUnrealizedPnL: 0 }]])(
+      'keeps absent broker P&L distinct from an observed zero: %j',
+      async (...entries) => {
+        scriptReconcile([SAMPLE_POSITION], []);
+        server.on(CTRADER_PAYLOAD_TYPE.GET_POSITION_UNREALIZED_PNL_REQ, (payload, envelope) =>
+          echo(
+            CTRADER_PAYLOAD_TYPE.GET_POSITION_UNREALIZED_PNL_RES,
+            {
+              ctidTraderAccountId: payload.ctidTraderAccountId,
+              positionUnrealizedPnL: entries.filter(Boolean),
+              moneyDigits: 2,
+            },
+            envelope,
+          ),
+        );
+        await connectDemo();
+        const [mark] = await adapter.getOpenPositionDisplay();
+        expect(mark.unrealisedPnl).toBe(entries.filter(Boolean).length ? '0.00' : null);
+      },
+    );
+
     it('maps reconciled positions to BrokerPosition (lots, prices, PnL, commission, swap)', async () => {
       scriptReconcile([SAMPLE_POSITION], []);
       server.on(CTRADER_PAYLOAD_TYPE.GET_POSITION_UNREALIZED_PNL_REQ, (payload, envelope) =>
