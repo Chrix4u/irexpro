@@ -1598,28 +1598,27 @@ export class StateReconciliationService {
     });
     const linked = linkedOrders.length === 1 ? linkedOrders[0] : null;
     const decimal = /^\d+(?:\.\d+)?$/;
-    return linked &&
-      linked.tradeId === trade.id &&
-      linked.userId === trade.userId &&
-      linked.brokerConnectionId === trade.brokerConnectionId &&
-      linked.providerOrderId === trade.externalOrderId &&
-      linked.orderKind === OrderKind.MARKET &&
-      linked.status === OrderStatus.FILLED &&
-      /^\d+$/.test(linked.providerOrderId ?? '') &&
-      /^\d+$/.test(linked.providerPositionId ?? '') &&
-      linked.providerPositionId !== '0' &&
-      linked.instrument === trade.instrument &&
-      linked.direction === trade.direction &&
-      [
-        linked.filledQuantity,
-        linked.avgFillPrice,
-        trade.lotSize,
-        trade.fillPrice,
-      ].every((value) => typeof value === 'string' && decimal.test(value)) &&
-      compareDecimal(linked.filledQuantity, trade.lotSize) === 0 &&
-      compareDecimal(linked.avgFillPrice!, trade.fillPrice!) === 0
-        ? linked.providerPositionId
-        : null;
+    if (
+      !linked ||
+      linked.tradeId !== trade.id ||
+      linked.userId !== trade.userId ||
+      linked.brokerConnectionId !== trade.brokerConnectionId ||
+      linked.providerOrderId !== trade.externalOrderId ||
+      linked.orderKind !== OrderKind.MARKET ||
+      linked.status !== OrderStatus.FILLED ||
+      !/^\d+$/.test(linked.providerOrderId ?? '') ||
+      !/^\d+$/.test(linked.providerPositionId ?? '') ||
+      linked.providerPositionId === '0' ||
+      linked.instrument !== trade.instrument ||
+      linked.direction !== trade.direction ||
+      ![linked.filledQuantity, linked.avgFillPrice, trade.lotSize, trade.fillPrice].every(
+        (value) => typeof value === 'string' && decimal.test(value),
+      ) ||
+      compareDecimal(linked.filledQuantity, trade.lotSize) !== 0 ||
+      compareDecimal(linked.avgFillPrice!, trade.fillPrice!) !== 0
+    )
+      return null;
+    return linked.providerPositionId;
   }
 
   /** Best-effort provider closed-trade economics for external closes. */
