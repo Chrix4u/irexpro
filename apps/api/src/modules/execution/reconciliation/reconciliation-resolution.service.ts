@@ -126,7 +126,12 @@ export class ReconciliationResolutionService {
       input.accountType,
       input.observedAt,
     );
-    if (!proof.matched) return false;
+    if (!proof.matched) {
+      // Log only the fixed proof reason and internal trade reference. Do not
+      // disclose provider deal payloads or change settlement eligibility.
+      this.logger.warn(`DEMO settlement deferred for trade ${trade.id}: ${proof.reason}`);
+      return false;
+    }
     const p = proof.provider;
     const patch: Partial<Trade> = {
       exitPrice: p.closePrice,

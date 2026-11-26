@@ -13,7 +13,7 @@ import { TradeIntent } from '../entities/trade-intent.entity';
 import { RiskGrant } from '../entities/risk-grant.entity';
 import { AllocationService } from '../services/allocation.service';
 import { Order } from '../orders/order.entity';
-import { OrderStatus } from '../orders/order.enums';
+import { OrderKind, OrderStatus } from '../orders/order.enums';
 import { OrderService } from '../orders/order.service';
 import { StateReconciliationService } from './state-reconciliation.service';
 import { ReconciliationPersistenceService } from './reconciliation-persistence.service';
@@ -909,6 +909,79 @@ describe('StateReconciliationService', () => {
         }),
       );
     });
+
+    it.each(['exact', 'wrong-owner', 'wrong-price', 'duplicate'])(
+      'uses only the unique verified durable entry-order position link (%s)',
+      async (variant) => {
+        const lateClosed = {
+          ...openTrade(),
+          status: TradeStatus.CLOSED,
+          externalOrderId: '123456',
+          externalPositionId: null,
+          fillPrice: '1.09766000',
+          lotSize: '3.4400',
+          openedAt: new Date('2026-11-25T23:20:22Z'),
+          closedAt: new Date('2026-11-25T23:21:07Z'),
+          realisedPnl: null,
+          commission: null,
+          exitPrice: null,
+        } as Trade;
+        const linked = {
+          ...pendingOrder(),
+          tradeId: lateClosed.id,
+          providerOrderId: '123456',
+          providerPositionId: '654321',
+          orderKind: OrderKind.MARKET,
+          status: OrderStatus.FILLED,
+          instrument: lateClosed.instrument,
+          direction: TradeDirection.BUY,
+          filledQuantity: '3.4400',
+          avgFillPrice: '1.09766',
+          ...(variant === 'wrong-owner' ? { userId: 'other-user' } : {}),
+          ...(variant === 'wrong-price' ? { avgFillPrice: '1.09767' } : {}),
+        } as Order;
+        const deal = {
+          externalOrderId: '654321',
+          instrument: 'EURUSD',
+          direction: 'SELL',
+          lotSize: '3.44',
+          openPrice: '1.09766',
+          closePrice: '1.09713',
+          realisedPnl: '-182.32',
+          commission: '-20.64',
+          swap: '0',
+          closedAt: lateClosed.closedAt,
+        };
+        tradeRepo.find.mockResolvedValueOnce([]).mockResolvedValueOnce([lateClosed]);
+        orderRepo.find
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce(variant === 'duplicate' ? [linked, linked] : [linked]);
+        adapter.getClosedTrades.mockResolvedValue([deal]);
+        const conn = {
+          ...connection(),
+          brokerId: 'pepperstone-ctrader',
+          encryptedCredentials: 'encrypted',
+          credentialIv: 'iv',
+          credentialTag: 'tag',
+        } as BrokerConnection;
+        encryptionService.decrypt.mockReturnValue({ accountId: 'demo-id' });
+        await service.runForConnection(conn);
+        expect(resolution.backfillClosedDemoSettlement).toHaveBeenCalledWith(
+          expect.objectContaining({
+            trade: expect.objectContaining({
+              externalPositionId: variant === 'exact' ? '654321' : null,
+            }),
+            providerDeals: [deal],
+          }),
+        );
+        if (variant === 'exact') {
+          expect(adapter.getOrderById).not.toHaveBeenCalled();
+        } else {
+          expect(adapter.getOrderById).toHaveBeenCalledWith('123456');
+        }
+        expect(lateClosed.externalPositionId).toBeNull();
+      },
+    );
 
     it('never probes late economics for a LIVE cTrader connection', async () => {
       const conn = {

@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Trade, TradeCloseReason, TradeStatus, TradeDirection } from '../entities/trade.entity';
@@ -1236,6 +1237,20 @@ describe('ReconciliationResolutionService', () => {
         await service.backfillClosedDemoSettlement({ ...request(), accountType: 'LIVE' }),
       ).toBe(false);
       expect(tradeRepo.update).not.toHaveBeenCalled();
+    });
+    it('reports a missing provider match without booking or publishing anything', async () => {
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      try {
+        expect(await service.backfillClosedDemoSettlement(request(missing(), []))).toBe(false);
+        expect(warn).toHaveBeenCalledWith(
+          'DEMO settlement deferred for trade trade-1: NO_EXACT_PROVIDER_POSITION',
+        );
+        expect(tradeRepo.update).not.toHaveBeenCalled();
+        expect(auditService.log).not.toHaveBeenCalled();
+        expect(eventBus.publish).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
     });
     it('avoids double reconciliation after another worker wins the update', async () => {
       tradeRepo.update.mockResolvedValueOnce({ affected: 0 });
