@@ -457,6 +457,47 @@ function statValue(page: Page, label: string): Locator {
 // ── /admin/live-ops — §39 operational overview ──────────────────────────────
 
 test.describe("Admin Live Ops overview page", () => {
+  test("statement CSV is inspected locally and cleared without upload", async ({ page }) => {
+    await gotoLiveOpsPage(page, "/admin/live-ops", /^live ops$/i);
+    const fixture = [
+      "Deals",
+      "Symbol,Opening direction,Closing time (UTC+0),Entry price,Closing price,Closing quantity,Net USD,Balance USD",
+      "EURUSD,Buy,03 Jan 2026 12:00:00.001,1.10,1.20,1 Lots,10.00,110.00",
+      ",,,,,,10.00,",
+      "",
+      "Summary",
+      "Deposit,Withdrawal,Total net,Equity,Unr. P&L,Realised P&L,Margin,Free margin,Margin level",
+      "100.00,0.00,100.00,110.00,0.00,10.00,0.00,110.00,—",
+      "",
+      "Balance",
+      "110.00",
+    ].join("\n");
+    const writes: string[] = [];
+    page.on("request", (request) => {
+      if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method()) &&
+          request.postData()?.includes("03 Jan 2026")) writes.push(request.url());
+    });
+    const input = page.getByLabel("Broker statement CSV");
+    await input.setInputFiles({
+      name: "synthetic.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from(fixture),
+    });
+    await expect(page.getByText("Arithmetic consistent", { exact: true })).toBeVisible();
+    await expect(page.getByRole("table", { name: "Statement consistency checks" }).locator("tbody tr")).toHaveCount(6);
+    expect(writes).toEqual([]);
+    await page.getByRole("button", { name: "Clear", exact: true }).click();
+    await expect(page.getByRole("table", { name: "Statement consistency checks" })).toHaveCount(0);
+    await input.setInputFiles({
+      name: "invalid.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from("not a statement"),
+    });
+    await expect(page.getByText(/Unsupported or invalid statement/)).toBeVisible();
+    await expect(page.getByRole("table", { name: "Statement consistency checks" })).toHaveCount(0);
+    expect(writes).toEqual([]);
+  });
+
   test("connection-state and discrepancy stat tiles render contract numbers", async ({
     page,
   }) => {

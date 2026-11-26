@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { StatementConsistencyPanel } from '@/components/statement-consistency-panel';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/context/auth-context';
 import { Alert, Badge, Button, Card, EmptyState } from '@/components/ui';
@@ -976,6 +977,7 @@ export default function AdminLiveOpsPage() {
       </Card>
 
       <RecoveryDiagnosticsPanel connections={authorityRows} />
+      <StatementConsistencyPanel />
 
       <Card title="Investigate further">
         <div className="admin-liveops-links">
