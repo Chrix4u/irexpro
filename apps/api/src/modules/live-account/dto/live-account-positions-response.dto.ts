@@ -1,6 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Trade, TradeDirection, TradeStatus } from '../../execution/entities/trade.entity';
-import { BrokerMode, type BrokerPosition } from '../../broker/interfaces/broker-adapter.interface';
+import {
+  BrokerMode,
+  type BrokerPositionDisplay,
+} from '../../broker/interfaces/broker-adapter.interface';
 import { LiveAccountEnvironment, LivePositionStatus } from './live-account.enums';
 
 export class LiveTradePathDiagnosticsDto {
@@ -151,7 +154,7 @@ export function toLivePositionRowView(
   trade: Trade,
   brokerName: string | null,
   environment: LiveAccountEnvironment,
-  providerPosition: BrokerPosition | null = null,
+  providerPosition: BrokerPositionDisplay | null = null,
 ): LivePositionRowViewDto {
   return {
     id: trade.id,

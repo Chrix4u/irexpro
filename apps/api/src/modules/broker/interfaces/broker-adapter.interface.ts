@@ -48,6 +48,8 @@ export interface IBrokerAdapter {
   getAccountInfo(): Promise<BrokerAccountInfo>;
   getAccountBalance(): Promise<BrokerBalance>;
   getOpenPositions(): Promise<BrokerPosition[]>;
+  /** Informational dashboard valuations only; never use for execution or reconciliation. */
+  getOpenPositionDisplay?(): Promise<BrokerPositionDisplay[]>;
   getPositionById(externalOrderId: string): Promise<BrokerPosition | null>;
 
   /**
@@ -413,6 +415,21 @@ export interface BrokerPosition {
   swap: string;
   pathDiagnostics?: BrokerTradePathDiagnostics;
 }
+
+/** Read-only display projection; missing price/P&L is not zero or execution evidence. */
+export type BrokerPositionDisplay = Pick<
+  BrokerPosition,
+  | 'externalOrderId'
+  | 'markObservedAt'
+  | 'markSource'
+  | 'markIsStale'
+  | 'commission'
+  | 'swap'
+  | 'pathDiagnostics'
+> & {
+  currentPrice: string | null;
+  unrealisedPnl: string | null;
+};
 
 export interface BrokerClosedTrade {
   externalOrderId: string;

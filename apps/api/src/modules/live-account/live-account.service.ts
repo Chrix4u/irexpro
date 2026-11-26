@@ -355,12 +355,12 @@ export class LiveAccountService {
     const connectionIds = [...new Set(trades.map((trade) => trade.brokerConnectionId))];
     const providerPositionsByConnection = new Map<
       string,
-      Map<string, import('../broker/interfaces/broker-adapter.interface').BrokerPosition>
+      Map<string, import('../broker/interfaces/broker-adapter.interface').BrokerPositionDisplay>
     >();
     await Promise.all(
       connectionIds.map(async (connectionId) => {
         try {
-          const snapshot = await this.brokerService.getOpenPositionsForConnection(
+          const snapshot = await this.brokerService.getDisplayPositionsForConnection(
             connectionId,
             userId,
           );
@@ -379,9 +379,11 @@ export class LiveAccountService {
       const context = connectionContext.get(trade.brokerConnectionId);
       const providerPositions = providerPositionsByConnection.get(trade.brokerConnectionId);
       const providerPosition =
-        (trade.externalPositionId ? providerPositions?.get(trade.externalPositionId) : undefined) ??
-        (trade.externalOrderId ? providerPositions?.get(trade.externalOrderId) : undefined) ??
-        null;
+        (trade.externalPositionId
+          ? providerPositions?.get(trade.externalPositionId)
+          : trade.externalOrderId
+            ? providerPositions?.get(trade.externalOrderId)
+            : undefined) ?? null;
       return toLivePositionRowView(
         trade,
         context?.brokerName ?? null,
