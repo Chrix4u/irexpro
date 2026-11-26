@@ -182,6 +182,12 @@ jobs:
 
       - name: Verify offline historical M1 feature completeness
         run: node --test apps/api/scripts/research/m1-feature-coverage.test.cjs
+
+      - name: Verify offline M1 abstention semantic taxonomy separation
+        run: node --test apps/api/scripts/research/m1-abstention-taxonomy.test.cjs
+
+      - name: Verify offline M1 cohort statistics against scipy references
+        run: node --test apps/api/scripts/research/m1-cohort-statistics.test.cjs
         env:
           NODE_ENV: test
 
