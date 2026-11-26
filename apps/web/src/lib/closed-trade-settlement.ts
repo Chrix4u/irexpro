@@ -20,3 +20,15 @@ export function hasPendingClosedTradeSettlement(
     trade.swap === null
   );
 }
+
+/** Explain pending settlement using the actual missing broker fields, not estimated amounts. */
+export function missingClosedTradeSettlementFields(trade: ClosedTradeSettlementFields): string[] {
+  if (trade.status !== 'CLOSED') return [];
+  const fields: Array<[keyof Omit<ClosedTradeSettlementFields, 'status'>, string]> = [
+    ['exitPrice', 'exit price'],
+    ['realisedPnl', 'realized P&L'],
+    ['commission', 'commission'],
+    ['swap', 'swap'],
+  ];
+  return fields.filter(([key]) => trade[key] === null).map(([, label]) => label);
+}
