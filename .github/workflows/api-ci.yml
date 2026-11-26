@@ -241,6 +241,26 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify V2 Challenger evaluation metrics stay offline and deterministic
+        run: node --test apps/api/scripts/research/v2-evaluation-metrics.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 Challenger cost-first admission never grants execution authority
+        run: node --test apps/api/scripts/research/v2-challenger-admission.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 paired champion-challenger comparison refuses unpaired evidence
+        run: node --test apps/api/scripts/research/v2-paired-champion-challenger.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 DEMO isolation topology validator enforces the six requirements
+        run: node --test apps/api/scripts/research/v2-demo-isolation-topology.test.cjs
+        env:
+          NODE_ENV: test
+
   build:
     name: Build
     runs-on: ubuntu-24.04
