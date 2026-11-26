@@ -56,3 +56,10 @@ Public-safe engineering checkpoint. Do not commit broker statements, customer in
 - #803/#805/#809/#810/#811/#812/#813/#818/#819 remain review candidates, not deployed changes.
 - Current active task: ACC-02, then ACC-01/ACC-03 and TEL-01; proceed with independent documentation, tests and review while runtime work is blocked.
 - Completion gate: exact evidence-based reconciliation, passing tests, appropriate authorization and verified runtime state. No production changes from this documentation.
+
+### Integration checkpoint — after #823
+
+- #823 merged after seven successful reported CI checks; backlog now on main (`ed5749fd`).
+- ACC-01/ACC-03 source comparison: #803 and #805 predate the ownership-bound FILLED entry proof reused by #822. Review requirements recorded in [#803](https://github.com/Chrix4u/irexpro/pull/803#issuecomment-7192471120) and [#805](https://github.com/Chrix4u/irexpro/pull/805#issuecomment-7192471816). Integration and regression validation remain open.
+- TEL-01: #821 SQL reviewed statically; runtime verification and tenant-scope review remain open.
+- Next: build an independently reviewed integration candidate against main, preserving #822, then validate with synthetic and non-production fixtures. ACC-02 remains unresolved; do not infer missing financial evidence or bypass release gates.
