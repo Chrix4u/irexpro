@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ComponentProps, ReactNode } from 'react';
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Animated,
   Easing,
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -271,19 +273,39 @@ export function ActionDialog({
   status?: { tone: 'success' | 'error' | 'info'; message: string } | null;
 }) {
   const progress = useRef(new Animated.Value(0)).current;
+  const [reduceMotion, setReduceMotion] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    let receivedEvent = false;
+    const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', (enabled) => {
+      receivedEvent = true;
+      if (active) setReduceMotion(enabled);
+    });
+    void AccessibilityInfo.isReduceMotionEnabled().then((enabled) => {
+      if (active && !receivedEvent) setReduceMotion(enabled);
+    }).catch(() => {});
+    return () => { active = false; subscription.remove(); };
+  }, []);
 
   useEffect(() => {
     if (!visible) {
       progress.setValue(0);
       return;
     }
-    Animated.timing(progress, {
+    if (reduceMotion) {
+      progress.setValue(1);
+      return;
+    }
+    const animation = Animated.timing(progress, {
       toValue: 1,
       duration: 210,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
-    }).start();
-  }, [progress, visible]);
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [progress, visible, reduceMotion]);
 
   const translateY = progress.interpolate({
     inputRange: [0, 1],
@@ -298,14 +320,16 @@ export function ActionDialog({
     <Modal
       transparent
       visible={visible}
-      animationType="fade"
+      animationType={reduceMotion ? 'none' : 'fade'}
       statusBarTranslucent
-      onRequestClose={busy ? undefined : onCancel}
+      onRequestClose={() => { if (!busy) onCancel(); }}
     >
       <View style={styles.dialogBackdrop}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Close dialog"
+          accessibilityState={{ disabled: busy }}
+          disabled={busy}
           style={StyleSheet.absoluteFill}
           onPress={busy ? undefined : onCancel}
         />
@@ -320,8 +344,9 @@ export function ActionDialog({
           accessibilityViewIsModal
         >
           <View style={[styles.dialogAccent, danger && styles.dialogAccentDanger]} />
+          <ScrollView style={styles.dialogScroll} keyboardShouldPersistTaps="handled">
           {kicker ? <Text style={styles.dialogKicker}>{kicker}</Text> : null}
-          <Text style={styles.dialogTitle}>{title}</Text>
+          <Text accessibilityRole="header" style={styles.dialogTitle}>{title}</Text>
           <Text style={styles.dialogMessage}>{message}</Text>
 
           {detailLines.length > 0 ? (
@@ -362,11 +387,13 @@ export function ActionDialog({
             </View>
           ) : null}
 
+          </ScrollView>
           <View style={styles.dialogActions}>
             {cancelLabel != null ? (
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={cancelLabel}
+                accessibilityState={{ disabled: busy }}
                 onPress={onCancel}
                 disabled={busy}
                 style={[styles.dialogButton, styles.dialogCancel, busy && styles.dialogDisabled]}
@@ -377,6 +404,7 @@ export function ActionDialog({
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={confirmLabel}
+              accessibilityState={{ disabled: busy, busy }}
               onPress={onConfirm}
               disabled={busy}
               style={[
@@ -527,6 +555,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
   },
   dialogPanel: {
+    maxHeight: '85%',
     overflow: 'hidden',
     borderRadius: 20,
     borderWidth: 1,
@@ -539,6 +568,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 12 },
     elevation: 16,
   },
+  dialogScroll: { flexShrink: 1 },
   dialogAccent: {
     position: 'absolute',
     left: 0,
@@ -618,11 +648,14 @@ const styles = StyleSheet.create({
   dialogStatusTextInfo: { color: palette.info.text },
   dialogActions: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
     marginTop: 18,
   },
   dialogButton: {
-    flex: 1,
+    flexGrow: 1,
+    flexBasis: 110,
+    flexShrink: 1,
     minHeight: 46,
     borderRadius: 11,
     alignItems: 'center',
@@ -641,8 +674,9 @@ const styles = StyleSheet.create({
     borderColor: '#b91c1c',
   },
   dialogDisabled: { opacity: 0.56 },
-  dialogCancelText: { color: palette.body, fontSize: 13, fontWeight: '800' },
+  dialogCancelText: { color: palette.body, fontSize: 13, fontWeight: '800', textAlign: 'center' },
   dialogConfirmText: {
+    textAlign: 'center',
     color: palette.accentText,
     fontSize: 13,
     fontWeight: '900',
