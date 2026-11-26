@@ -1114,7 +1114,7 @@ describe('CTraderAdapter', () => {
       {
         entries: [{ positionId: 7654321, grossUnrealizedPnL: 0, netUnrealizedPnL: 0 }],
         expected: '0.00',
-      }
+      },
     ])(
       'keeps absent broker P&L distinct from an observed zero: $expected',
       async ({ entries, expected }) => {
