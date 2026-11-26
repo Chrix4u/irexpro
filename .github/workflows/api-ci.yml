@@ -216,6 +216,21 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify V2 Challenger attribution ledger is isolated and append-only
+        run: node --test apps/api/scripts/research/v2-challenger-attribution.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 statistical evaluation framework reference values
+        run: node --test apps/api/scripts/research/v2-statistical-evaluation.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 entry-exit decomposition identity and refusals
+        run: node --test apps/api/scripts/research/v2-entry-exit-decomposition.test.cjs
+        env:
+          NODE_ENV: test
+
   build:
     name: Build
     runs-on: ubuntu-24.04
