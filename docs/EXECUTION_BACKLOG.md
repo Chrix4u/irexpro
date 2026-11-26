@@ -189,3 +189,10 @@ All items below are open engineering work unless explicitly supported by a linke
 - #828 extends the synthetic diagnostic fixture to closed trades with complete, partial, absent and audit-only path evidence and pending settlement; CI required before merge.
 - Read-only staging quiescence guard passed at this checkpoint. This is a time-specific prerequisite result, not release approval or proof of historical reconciliation; recheck immediately before any authorized release.
 - Resume: verify #828 CI, review actual main integration and ledger regression results, then authorized read-only account-scoped reconciliation and release review. No production records or trading controls changed.
+
+### Checkpoint — combined accounting acceptance
+
+- #828 merged (`dcbad3a2`) after eight successful CI checks, including expanded synthetic PostgreSQL closed-path and settlement coverage. No runtime settlement verification implied.
+- Reviewed the existing PostgreSQL ledger suite and CI configuration: tests cover replay, concurrent duplicate/cross-order attribution, overfill atomicity, evidence immutability, ownership constraints and migration rollback. The risk-concurrency workflow executes the PostgreSQL Jest configuration. #827 reported successful execution of that CI job; the actual historical accounting state remains unverified.
+- #829 adds focused regression cases for the existing stored-position identity helper: scoped unique lookup, duplicate refusal, invalid native identifiers, contradictory ownership/side/status and exact decimal evidence. CI pending; no runtime changes.
+- Resume: verify #829 required CI, then complete authorized read-only account-specific verification and review verified release artifacts. If runtime evidence is inaccessible, continue independent acceptance tests and review without altering settlement or live execution.
