@@ -33,8 +33,7 @@ describe('admin recovery diagnostics projection', () => {
     { selected: 0, outcomes: { RECOVERY_ERROR: -1 } },
   ])('rejects malformed or incomplete counts', (recent) => {
     expect(
-      toAdminRecoveryDiagnostics(run({ demoCloseRecovery: { recent, aged: empty } }))
-        ?.diagnostics,
+      toAdminRecoveryDiagnostics(run({ demoCloseRecovery: { recent, aged: empty } }))?.diagnostics,
     ).toBeNull();
   });
 });
