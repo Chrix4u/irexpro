@@ -801,6 +801,7 @@ export class StateReconciliationService {
           );
         for (const order of recentCloseOrders) {
           liveRecoveryAttemptedOrderIds.add(order.id);
+          let recoveryStage = 'RECOVERY_TRADE_LOOKUP_ERROR';
           try {
             // An order cannot be inferred from a closed position if another
             // close order for that trade might have caused the same deal.
@@ -836,6 +837,7 @@ export class StateReconciliationService {
             // Closing deals are keyed by the native position, not the entry order.
             // Reuse the unique, ownership-bound FILLED entry proof without
             // persisting a guessed identifier or weakening the deal predicates.
+            recoveryStage = 'RECOVERY_POSITION_EVIDENCE_ERROR';
             const verifiedPositionRef = trade.externalPositionId
               ? null
               : await this.findVerifiedStoredPositionRef(trade);
@@ -853,10 +855,12 @@ export class StateReconciliationService {
             }
             // Bounded to this specific position's original entry: querying
             // from only the close order timestamp could hide partial deals.
+            recoveryStage = 'RECOVERY_PROVIDER_HISTORY_ERROR';
             const providerDeals = await adapter.getClosedTrades(
               new Date(Math.max(0, trade.openedAt.getTime() - 60_000)),
               asOf,
             );
+            recoveryStage = 'RECOVERY_PROOF_EVALUATION_ERROR';
             const proof = provePepperstoneDemoClosedOrderFill({
               brokerId: connection.brokerId,
               accountType: String(connection.accountType).toUpperCase(),
@@ -881,6 +885,7 @@ export class StateReconciliationService {
             // proof was derived from: a concurrent worker that already moved
             // the accounting makes this delivery an idempotent no-op — no
             // identifier is fabricated to dedup on.
+            recoveryStage = 'RECOVERY_FILL_ACCOUNTING_ERROR';
             const completed = await this.orderService.applyFill(
               order.id,
               {
@@ -906,7 +911,7 @@ export class StateReconciliationService {
             });
             autoResolvedCount++;
           } catch (error) {
-            recordCloseRecovery('recent', 'RECOVERY_ERROR');
+            recordCloseRecovery('recent', recoveryStage);
             errors++;
             this.logger.warn(
               'Pepperstone DEMO closed-order deal convergence ' +
@@ -947,6 +952,7 @@ export class StateReconciliationService {
             agedCandidates[agedCandidates.length - 1].id,
           );
         for (const order of agedCandidates) {
+          let recoveryStage = 'RECOVERY_TRADE_LOOKUP_ERROR';
           try {
             const trade = await this.tradeRepo.findOne({
               where: {
@@ -968,6 +974,7 @@ export class StateReconciliationService {
             // Closing deals are keyed by the native position, not the entry order.
             // Reuse the unique, ownership-bound FILLED entry proof without
             // persisting a guessed identifier or weakening the deal predicates.
+            recoveryStage = 'RECOVERY_POSITION_EVIDENCE_ERROR';
             const verifiedPositionRef = trade.externalPositionId
               ? null
               : await this.findVerifiedStoredPositionRef(trade);
@@ -985,6 +992,7 @@ export class StateReconciliationService {
             }
             // Bounded to this specific position's original entry: querying
             // from only the close order timestamp could hide partial deals.
+            recoveryStage = 'RECOVERY_PROVIDER_HISTORY_ERROR';
             const providerDeals = await adapter.getClosedTrades(
               new Date(Math.max(0, trade.openedAt.getTime() - 60_000)),
               agedAsOf,
@@ -992,6 +1000,7 @@ export class StateReconciliationService {
             // Aged trades with NULL close economics need the settlement
             // backfilled FIRST (NULL-only CAS, unique-deal proof) so the
             // order-row proof has exit price / realised P&L to verify.
+            recoveryStage = 'RECOVERY_SETTLEMENT_BACKFILL_ERROR';
             if (agedTradeNeedsSettlementBackfill(trade)) {
               const backfilled = await this.resolution.backfillClosedDemoSettlement({
                 trade: tradeForProof,
@@ -1007,6 +1016,7 @@ export class StateReconciliationService {
                 if (refreshed) Object.assign(trade, refreshed);
               }
             }
+            recoveryStage = 'RECOVERY_PROOF_EVALUATION_ERROR';
             const proof = proveAgedCtraderDemoClosedOrderFill({
               brokerId: connection.brokerId,
               accountType: String(connection.accountType).toUpperCase(),
@@ -1033,6 +1043,7 @@ export class StateReconciliationService {
             // proof was derived from: a concurrent worker that already moved
             // the accounting makes this delivery an idempotent no-op — no
             // identifier is fabricated to dedup on.
+            recoveryStage = 'RECOVERY_FILL_ACCOUNTING_ERROR';
             const completed = await this.orderService.applyFill(
               order.id,
               {
@@ -1059,7 +1070,7 @@ export class StateReconciliationService {
             });
             autoResolvedCount++;
           } catch (error) {
-            recordCloseRecovery('aged', 'RECOVERY_ERROR');
+            recordCloseRecovery('aged', recoveryStage);
             errors++;
             this.logger.warn(
               'Aged DEMO closed-order recovery deferred for order ' +
