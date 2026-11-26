@@ -29,3 +29,15 @@ export function executionPathDiagnostics(
     lastObservedAt: trade.pathLastObservedAt ?? null,
   };
 }
+
+/** Closed trades retain their telemetry layout even when no measured path is available. */
+export function closedTradePathPresentation(trade: TradeExecutionView): {
+  diagnostics: ExecutionPathDiagnosticsView | null;
+  unavailable: boolean;
+} {
+  const diagnostics = executionPathDiagnostics(trade);
+  return {
+    diagnostics,
+    unavailable: trade.status === 'CLOSED' && diagnostics === null,
+  };
+}
