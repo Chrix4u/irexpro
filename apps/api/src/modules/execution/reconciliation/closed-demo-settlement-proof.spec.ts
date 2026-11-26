@@ -78,6 +78,16 @@ describe('closed Pepperstone DEMO broker-native settlement proof', () => {
     expect(verify([{ ...deal, closedAt: new Date('2026-11-12T06:37:04Z') }]).matched).toBe(false);
     expect(verify([{ ...deal, openPrice: '0.83320' }]).matched).toBe(false);
   });
+  it.each([
+    [{ instrument: 'EURUSD' }, 'INSTRUMENT_MISMATCH'],
+    [{ closedAt: new Date('invalid') }, 'INVALID_PROVIDER_CLOSE_TIME'],
+    [{ closedAt: new Date('2026-11-12T05:00:00Z') }, 'PROVIDER_CLOSE_BEFORE_INTERNAL_OPEN'],
+    [{ closedAt: new Date('2026-11-12T07:47:00Z') }, 'PROVIDER_CLOSE_IN_FUTURE'],
+    [{ closedAt: new Date('2026-11-12T06:37:04Z') }, 'PROVIDER_CLOSE_TIME_DELTA_EXCEEDS_WINDOW'],
+  ] as const)('distinguishes failed identity/time checks (%s)', (changes, reason) => {
+    expect(verify([{ ...deal, ...changes }])).toEqual({ matched: false, reason });
+  });
+
   it('will not guess P&L, fee, or broker cost sign from incomplete data', () => {
     for (const partial of [
       { realisedPnl: '' },

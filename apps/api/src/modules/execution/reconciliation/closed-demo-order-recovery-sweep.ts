@@ -31,8 +31,8 @@ import { TradeStatus } from '../entities/trade.entity';
  * remains subject to independent operator review.
  */
 
-/** Bounded per-cycle budget for the aged historical sweep. */
-export const AGED_DEMO_CLOSE_RECOVERY_BATCH = 25;
+/** Keep historical deal reads small so they cannot monopolize broker quota. */
+export const AGED_DEMO_CLOSE_RECOVERY_BATCH = 2;
 
 export function selectAgedDemoCloseRecoveryCandidates<
   T extends Pick<

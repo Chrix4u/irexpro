@@ -312,7 +312,11 @@ export class ReconciliationResolutionService {
         realisedPnl,
         commission,
         swap,
-        providerClosedAt: closedAt.toISOString(),
+        // Absence in a provider snapshot proves neither a deal timestamp nor
+        // its economics. Preserve the local observation separately.
+        providerClosedAt: closedTrade ? closedTrade.closedAt.toISOString() : null,
+        internalClosedAt: closedAt.toISOString(),
+        closeTimeSource: closedTrade ? 'PROVIDER_DEAL' : 'LOCAL_RECONCILIATION_OBSERVATION',
         externalOrderId: trade.externalOrderId,
         pathDiagnosticsSource,
         pathDiagnostics: pathDiagnostics
