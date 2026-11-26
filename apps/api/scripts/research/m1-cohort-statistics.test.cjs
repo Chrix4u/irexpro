@@ -68,6 +68,7 @@ test('cohort analysis reproduces the reported abstention review aggregates', () 
     auc: 0.4752,
     aucWinners: 105,
     aucLosers: 87,
+    settledNetUsd: -1,
   });
   assert.equal(r.counts.nonAbstained, 38);
   assert.equal(r.counts.nonAbstainedWins, 19);
@@ -79,7 +80,8 @@ test('cohort analysis reproduces the reported abstention review aggregates', () 
   assert.ok(Math.abs(r.auc.p - 0.5545) < 0.005);
   // payoff asymmetry bound from net-negative cohorts
   assert.ok(Math.abs(r.payoffAsymmetry.breakevenAvgLossOverAvgWin - 1.2069) < 0.001);
-  assert.ok(Math.abs(r.payoffAsymmetry.designBreakevenWinRate - 1 / 2.6) < 1e-12);
+  assert.ok(Math.abs(r.payoffAsymmetry.realizedDollarLossWinRatioStrictLowerBound - 105 / 87) < 1e-12);
+  assert.equal(r.inferentialStatus, 'ILLUSTRATIVE_INDEPENDENCE_ASSUMPTION_UNVERIFIED');
   // research-only posture
   assert.equal(r.executionAuthority, 'NONE');
   assert.equal(r.researchOnly, true);
@@ -113,4 +115,25 @@ test('invalid aggregates are rejected instead of silently scored', () => {
   });
   assert.equal(all.counts.nonAbstained, 0);
   assert.equal(all.group.nonAbstained, null); // 0/0 has no interval; stays visible, never imputed
+});
+
+test('rejects negative, unsafe, nonfinite and contradictory aggregate inputs', () => {
+  const base = { total: 10, wins: 6, losses: 4, abstainedWins: 3, abstainedLosses: 2 };
+  for (const bad of [null, { ...base, abstainedWins: -1 }, { ...base, total: 0, wins: 0, losses: 0 },
+    { ...base, wins: Number.MAX_SAFE_INTEGER + 1 }, { ...base, settledNetUsd: Infinity },
+    { ...base, auc: 0.5, aucWinners: 7, aucLosers: 4 },
+    { ...base, auc: 0.5 }, { ...base, auc: NaN, aucWinners: 6, aucLosers: 4 }]) {
+    assert.equal(analyzeCohort(bad), null);
+  }
+  assert.equal(fisherExact2x2(-1, 1, 1, 1), null);
+  assert.equal(fisherExact2x2(1, 1, 0, 0), null);
+  assert.equal(aucStandardError(0.5, 0, 1), null);
+  assert.equal(nNeededForAuc(0), null);
+  assert.equal(minDetectableAucDelta(0, 1), null);
+});
+test('requires negative settled net evidence for a realized dollar ratio bound', () => {
+  const base = { total: 10, wins: 6, losses: 4, abstainedWins: 3, abstainedLosses: 2 };
+  assert.equal(analyzeCohort(base).payoffAsymmetry.realizedDollarLossWinRatioStrictLowerBound, null);
+  assert.equal(analyzeCohort({ ...base, settledNetUsd: 1 }).payoffAsymmetry.realizedDollarLossWinRatioStrictLowerBound, null);
+  assert.equal(analyzeCohort({ ...base, settledNetUsd: -1 }).payoffAsymmetry.realizedDollarLossWinRatioStrictLowerBound, 1.5);
 });
