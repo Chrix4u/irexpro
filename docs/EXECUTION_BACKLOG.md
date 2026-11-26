@@ -195,3 +195,10 @@ All items below are open engineering work unless explicitly supported by a linke
 - #829 lint found formatting errors in the new test fixture; corrected in `f1c41b6`. PostgreSQL concurrency and four existing exit/protection regression checks passed on the preceding candidate; latest CI must pass before merge.
 - #830 introduces strict direct ingestion of the supported USD UTC Deals CSV, validating exact total, timestamps, positive prices/lot sizes and section boundaries. Tests use synthetic values only; normalized CSV compatibility retained. No provider calls, settlement writes or runtime deployment.
 - Next: verify #829 and #830 required CI and merge only after review. Continue ACC-01/03 acceptance and ACC-02 authorized read-only review; if runtime evidence remains inaccessible, work on independent platform acceptance tasks. Do not treat diagnostic matches as settlement authority.
+
+### Checkpoint — direct statement ingestion and independent mobile work
+
+- #830 merged (`59fa6087`) after eleven executed CI checks passed (full lint audit skipped). Native USD UTC Deals CSV input now validates the supported layout and exact net total; historical verification remains outstanding.
+- #829 functional tests passed on `f1c41b6`; final lint annotation corrected in `b3a86f50`. Latest checkpoint overlap with #830 resolved in `2ce3488c`. Verify latest required CI and mergeability, not earlier check status.
+- MOB-04/05: #831 implements a compact dashboard and explicit unavailable/checking/conflicting readiness display, discards superseded refresh responses and adds pure presentation tests. Current candidate `210d9fb7`; mobile CI and physical device verification remain outstanding. No server trading authorization changed.
+- Resume: verify #829/#831 latest CI, account for unresolved historical reconciliation, then continue independent mobile/web acceptance and release review. No deployment performed.
