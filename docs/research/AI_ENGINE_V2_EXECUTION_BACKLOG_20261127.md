@@ -39,6 +39,17 @@ production runtime.
 
 ## P1 — Research consolidation (design work, no runtime changes)
 
+- [x] **P1-0** Engine component map (P1 groundwork, delivered in this
+  branch) → `docs/research/AI_ENGINE_V2_COMPONENT_MAP_20261127.md` +
+  executable mirror `apps/api/scripts/research/v2-engine-component-map.cjs`
+  (+ test, CI-verified). Acceptance: 64 components across 17 families; every
+  entry cites a path-verified file, exported artifact and constants with
+  line references; audit counts reconciled exactly (4 scorers / 6 reversal
+  definitions / 9 reliability gates / 6 calibration layers / 6 exit engines /
+  5 prediction families / 6 confidence-floor copies; Python 128-column
+  contract verified by execution); CI drift detector re-proves path
+  existence and count reconciliation on every run; inventory tampering is a
+  typed refusal. Inputs for P1-1..P1-6 (see the map's §10).
 - [ ] **P1-1** Direction-scorer unification spec (A1): inventory the four
   scorers' feature sets; define the single V2 contract (columns, units,
   missing-value semantics). Acceptance: signed-off spec doc; no runtime edit.
