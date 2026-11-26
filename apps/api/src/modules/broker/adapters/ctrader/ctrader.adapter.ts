@@ -92,6 +92,7 @@ import {
   BrokerOrderResult,
   BrokerOrderState,
   BrokerPosition,
+  BrokerPositionDisplay,
   BrokerPrice,
   DecryptedBrokerCredentials,
   IBrokerAdapter,
@@ -271,6 +272,9 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
    * unsubscribe has been acknowledged.
    */
   private readonly spotQuoteFlights = new Map<string, Promise<CtraderSpotEventPayload>>();
+  // Display only; no trading/quote consumer reads this cache. Session identity
+  // prevents reuse across account/environment replacement or disconnect.
+  private readonly displayQuotes = new WeakMap<AdapterSession, Map<number, CtraderSpotEventPayload>>();
   private currentAccountId: string | null = null;
   /**
    * Unique lease-owner key for the client's account-session refcounting
@@ -482,6 +486,55 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
     try {
       const positions = await this.fetchReconcilePositions(session);
       return await this.enrichPositions(session, positions);
+    } catch (err) {
+      throw this.mapError(err);
+    }
+  }
+
+  /** Dashboard P&L comes straight from the broker, independently of spot subscriptions. */
+  async getOpenPositionDisplay(): Promise<BrokerPositionDisplay[]> {
+    const session = this.requireCurrentSession();
+    try {
+      const positions = await this.fetchReconcilePositions(session);
+      if (positions.length === 0) return [];
+      const pnls = await this.fetchUnrealizedPnl(session);
+      const observedAt = new Date();
+      const byPosition = new Map<number, number>();
+      const duplicates = new Set<number>();
+      for (const entry of pnls.entries) {
+        if (!Number.isSafeInteger(entry.positionId) || !Number.isSafeInteger(entry.netUnrealizedPnL)) {
+          continue;
+        }
+        if (byPosition.has(entry.positionId)) duplicates.add(entry.positionId);
+        byPosition.set(entry.positionId, entry.netUnrealizedPnL);
+      }
+      const validDigits = Number.isInteger(pnls.moneyDigits) && pnls.moneyDigits >= 0 && pnls.moneyDigits <= 8;
+      return positions.map((position) => {
+        const pnl = byPosition.get(position.positionId);
+        const quote = this.displayQuotes.get(session)?.get(position.tradeData.symbolId);
+        const quoteTime = Number(quote?.timestamp);
+        const age = observedAt.getTime() - quoteTime;
+        const currentPrice =
+          quote?.bid != null && quote.ask != null &&
+          Number.isFinite(quoteTime) && age >= -SPOT_EVENT_MAX_CLOCK_AHEAD_MS && age <= 30_000
+            ? spotMidPrice(quote.bid, quote.ask)
+            : null;
+        const unrealisedPnl = validDigits && pnl !== undefined && !duplicates.has(position.positionId)
+          ? moneyToDecimalString(pnl, pnls.moneyDigits)
+          : null;
+        return {
+          externalOrderId: String(position.positionId),
+          currentPrice,
+          unrealisedPnl,
+          markSource: unrealisedPnl !== null || currentPrice !== null ? 'PROVIDER' : null,
+          markObservedAt: unrealisedPnl !== null || currentPrice !== null
+            ? new Date(currentPrice !== null ? Math.min(quoteTime, observedAt.getTime()) : observedAt.getTime())
+            : null,
+          markIsStale: false,
+          commission: moneyToDecimalString(position.commission ?? 0, position.moneyDigits ?? 2),
+          swap: moneyToDecimalString(position.swap ?? 0, position.moneyDigits ?? 2),
+        };
+      });
     } catch (err) {
       throw this.mapError(err);
     }
@@ -2046,6 +2099,16 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
 
     const flight = this.fetchSpotQuoteOnce(session, symbolId);
     this.spotQuoteFlights.set(flightKey, flight);
+    // Observe successful native quotes for the dashboard without changing
+    // the strict quote promise, subscription lifecycle or execution gates.
+    void flight.then((quote) => {
+      let quotes = this.displayQuotes.get(session);
+      if (!quotes) {
+        quotes = new Map();
+        this.displayQuotes.set(session, quotes);
+      }
+      quotes.set(symbolId, quote);
+    }).catch(() => undefined);
     void flight
       .finally(() => {
         if (this.spotQuoteFlights.get(flightKey) === flight) {
