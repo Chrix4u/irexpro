@@ -176,6 +176,9 @@ jobs:
 
       - name: Verify offline M1 evidence provenance and coverage
         run: node --test apps/api/scripts/research/m1-decision-evidence-coverage.test.cjs
+
+      - name: Verify offline M1 abstention margin measurements
+        run: node --test apps/api/scripts/research/m1-abstention-margin.test.cjs
         env:
           NODE_ENV: test
 
