@@ -173,3 +173,9 @@ All items below are open engineering work unless explicitly supported by a linke
 - Next actionable: verify #821 CI and review its synthetic fixture/SQL, then proceed to ACC-01/03 compatibility integration on current main. Account-specific runtime checks require an authorized connection and appropriate read-only access.
 - Scope audit: eight top-level application/service/package directories identified; native mobile and Windows connector source exist, standalone desktop application not verified.
 - Repository is currently public. Keep backlog sanitized; do not publish private evidence or change repository visibility without explicit review of access, CI and cost implications.
+
+### Latest active-session checkpoint
+
+- #821 current head `69e13e12`: synthetic PostgreSQL, tracked source scan and dependency checks reported success; required CI and CodeQL still pending after the container digest was pinned. No runtime diagnostic executed.
+- #827 current head `e268f56b`: added aggregate-only economic mismatch classification and synthetic regression coverage; CI running. Exact matching, ambiguity refusal and reconciliation status remain unchanged.
+- Resume: verify #821, #826 and #827 at their latest heads; merge only after required CI and review gates pass. Then perform ACC-02 authorized read-only verification or proceed with ACC-01/03 independent integration review if that access is blocked. No deployment or financial mutation occurred.
