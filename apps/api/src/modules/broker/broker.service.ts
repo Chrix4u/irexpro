@@ -27,6 +27,9 @@ import {
   BrokerInstrument,
   BrokerMode,
   BrokerPrice,
+  BrokerPosition,
+  BrokerPositionDisplay,
+  IBrokerAdapter,
   DecryptedBrokerCredentials,
   OHLCV,
 } from './interfaces/broker-adapter.interface';
@@ -1898,10 +1901,25 @@ export class BrokerService {
   async getOpenPositionsForConnection(
     connectionId: string,
     userId: string,
-  ): Promise<{
-    connection: BrokerConnection;
-    positions: import('./interfaces/broker-adapter.interface').BrokerPosition[];
-  }> {
+  ): Promise<{ connection: BrokerConnection; positions: BrokerPosition[] }> {
+    return this.readConnectionPositions(connectionId, userId, (adapter) => adapter.getOpenPositions());
+  }
+
+  /** Dashboard-only partial marks; the execution/reconciliation method stays strict. */
+  async getDisplayPositionsForConnection(
+    connectionId: string,
+    userId: string,
+  ): Promise<{ connection: BrokerConnection; positions: BrokerPositionDisplay[] }> {
+    return this.readConnectionPositions(connectionId, userId, (adapter) =>
+      adapter.getOpenPositionDisplay ? adapter.getOpenPositionDisplay() : adapter.getOpenPositions(),
+    );
+  }
+
+  private async readConnectionPositions<T extends BrokerPositionDisplay>(
+    connectionId: string,
+    userId: string,
+    read: (adapter: IBrokerAdapter) => Promise<T[]>,
+  ): Promise<{ connection: BrokerConnection; positions: T[] }> {
     const connection = await this.findConnectionById(connectionId, userId);
     if (connection.status !== BrokerConnectionStatus.CONNECTED) {
       throw new ForbiddenException(
@@ -1934,7 +1952,7 @@ export class BrokerService {
 
     try {
       await adapter.connect(credentials);
-      const positions = await adapter.getOpenPositions();
+      const positions = await read(adapter);
       return { connection, positions };
     } catch (err) {
       this.logger.warn(
