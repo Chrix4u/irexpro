@@ -2148,68 +2148,38 @@
 }
 
 .ai-readiness__meter {
-  position: relative;
-  width: min(100%, 300px);
-  margin: 1.15rem auto 0;
-  padding-top: 9rem;
+  width: min(100%, 320px);
+  margin: 0.9rem auto 0;
   text-align: center;
 }
 
-.ai-readiness__arc {
-  position: absolute;
-  top: 0;
-  left: 50%;
-  width: 270px;
-  max-width: 94%;
-  aspect-ratio: 2 / 1;
-  transform: translateX(-50%);
-  overflow: hidden;
-  border-radius: 270px 270px 0 0;
-  background: conic-gradient(
-    from 270deg at 50% 100%,
-    var(--error) 0deg 63deg,
-    var(--warning) 63deg 126deg,
-    var(--success) 126deg 180deg,
-    transparent 180deg 360deg
-  );
-  box-shadow: 0 0 28px rgba(13,148,136,0.08);
+.ai-readiness__dial {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  color: var(--text-primary, #f8fafc);
 }
-.ai-readiness__arc::after {
-  content: "";
-  position: absolute;
-  left: 17px;
-  right: 17px;
-  bottom: -1px;
-  aspect-ratio: 2 / 1;
-  border-radius: 240px 240px 0 0;
-  background: var(--bg-card);
+.ai-readiness__tick {
+  stroke: var(--text-secondary, #94a3b8);
+  stroke-width: 1.5;
+  stroke-linecap: round;
 }
-
-.ai-readiness__needle {
-  position: absolute;
-  z-index: 2;
-  left: 50%;
-  bottom: 0;
-  width: 43%;
-  height: 3px;
-  border-radius: 999px;
-  background: #f8fafc;
-  box-shadow: 0 0 9px rgba(255,255,255,0.55);
-  transform-origin: 0 50%;
+.ai-readiness__tick-label {
+  fill: var(--text-primary, #f8fafc);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.ai-readiness__dial-needle {
+  transform-box: view-box;
+  transform-origin: 160px 144px;
   transition: transform 360ms cubic-bezier(.2,.8,.2,1);
 }
-.ai-readiness__hub {
-  position: absolute;
-  z-index: 3;
-  left: 50%;
-  bottom: 0;
-  width: 14px;
-  height: 14px;
-  border: 3px solid #f8fafc;
-  border-radius: 50%;
-  background: var(--bg-card);
-  transform: translate(-50%, 50%);
-  box-shadow: 0 0 0 4px rgba(255,255,255,0.06);
+.ai-readiness__dial-hub {
+  fill: var(--bg-card, #111827);
+  stroke: var(--text-primary, #f8fafc);
+  stroke-width: 2.5;
 }
 
 .ai-readiness__score {
@@ -2297,16 +2267,18 @@
 .ai-readiness__legend {
   display: flex;
   justify-content: center;
-  gap: 0.95rem;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.8rem;
   margin-top: 0.8rem;
   color: var(--text-muted);
   font-size: 0.7rem;
 }
 .ai-readiness__legend span { display: inline-flex; align-items: center; gap: 0.32rem; }
 .ai-readiness__legend i { width: 7px; height: 7px; border-radius: 50%; }
-.ai-readiness__legend .is-waiting { background: var(--error); }
-.ai-readiness__legend .is-forming { background: var(--warning); }
-.ai-readiness__legend .is-ready { background: var(--success); }
+.ai-readiness__legend .is-low { background: #ef4444; }
+.ai-readiness__legend .is-developing { background: #f97316; }
+.ai-readiness__legend .is-forming { background: #eab308; }
+.ai-readiness__legend .is-high { background: #22c55e; }
 
 .ai-performance-panel__stats {
   display: grid;
@@ -2564,8 +2536,6 @@
   .ai-kpi-card__value { font-size: 1.15rem; }
   .ai-production-overview { gap: 0.75rem; }
   .ai-readiness, .ai-performance-panel { padding: 1rem; border-radius: 14px; }
-  .ai-readiness__arc { width: 240px; }
-  .ai-readiness__meter { padding-top: 8rem; }
   .ai-performance-panel__stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .ai-performance-quality__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -2574,12 +2544,10 @@
   .ai-kpi-grid { grid-template-columns: 1fr; }
   .ai-performance-panel__stats { grid-template-columns: 1fr; }
   .ai-readiness__head, .ai-performance-panel__head { align-items: center; }
-  .ai-readiness__arc { width: 220px; }
-  .ai-readiness__meter { padding-top: 7.25rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ai-readiness__needle { transition: none; }
+  .ai-readiness__dial-needle { transition: none; }
 }
 
 /* Two cards: broker + its allocated funds, and a spacious risk-aware AI action. */
@@ -2661,22 +2629,7 @@
   color: var(--text-muted);
 }
 
-/* Live scan activity: the white readiness needle remains authoritative; this teal sweep is activity only. */
-.ai-readiness__scan-needle {
-  position: absolute;
-  z-index: 1;
-  left: 50%;
-  bottom: 0;
-  width: 39%;
-  height: 2px;
-  border-radius: 999px;
-  background: rgba(45, 212, 191, 0.82);
-  box-shadow: 0 0 12px rgba(45, 212, 191, 0.6);
-  transform-origin: 0 50%;
-  transition: transform 820ms cubic-bezier(.22,.75,.25,1);
-  opacity: 0.8;
-}
-
+/* Live scan activity is separate from the readiness dial. */
 .ai-readiness__scan-live {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -2899,7 +2852,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ai-readiness__scan-needle { transition: none; }
   .ai-readiness__scan-pulse { animation: none; }
   .ai-readiness__pipeline > div { transition: none; }
 }
