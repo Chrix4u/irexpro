@@ -244,10 +244,21 @@ async function inspect(db, options) {
   const from = utcDayBoundary(options.from);
   const to = utcDayBoundary(options.to);
   if (from && to && from >= to) throw new Error('INVALID_UTC_WINDOW');
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(options.connectionId || '')) {
+    throw new Error('EXPLICIT_BROKER_CONNECTION_REQUIRED');
+  }
+  const params = [options.connectionId];
+  const bind = (value) => `$${params.push(value)}`;
+  // Both queries use the same account and UTC window. Economic fingerprints
+  // alone cannot establish that two different accounts own the same deal.
+  const filters = [
+    'AND b.id = $1::uuid',
+    options.broker ? `AND b.broker_id = ${bind(options.broker)}` : '',
+    from ? `AND t.closed_at >= ${bind(from)}::timestamptz` : '',
+    to ? `AND t.closed_at < ${bind(to)}::timestamptz` : '',
+  ].join(' ');
   await db.query('BEGIN READ ONLY');
   try {
-    const brokerFilter = options.broker ? "AND b.broker_id = $1" : '';
-    const strandedParams = options.broker ? [options.broker] : [];
     const stranded = (
       await db.query(
         `SELECT o.id AS order_id, o.status AS order_status, o.order_kind,
@@ -261,19 +272,12 @@ async function inspect(db, options) {
          WHERE o.status = 'RECONCILIATION_PENDING' AND o.order_kind = 'MARKET'
            AND o.provider_order_id IS NULL AND o.filled_quantity = 0
            AND t.status = 'CLOSED' AND o.direction <> t.direction
-           AND UPPER(b.account_type) = 'DEMO' ${brokerFilter}
+           AND UPPER(b.account_type) = 'DEMO' ${filters}
          ORDER BY t.closed_at ASC`,
-        strandedParams,
+        params,
       )
     ).rows;
 
-    const closedParams = [];
-    const bind = (value) => `$${closedParams.push(value)}`;
-    const filters = [
-      options.broker ? `AND b.broker_id = ${bind(options.broker)}` : '',
-      from ? `AND t.closed_at >= ${bind(from)}::timestamptz` : '',
-      to ? `AND t.closed_at < ${bind(to)}::timestamptz` : '',
-    ].join(' ');
     const closed = (
       await db.query(
         `SELECT t.id, t.instrument, t.direction, t.lot_size, t.fill_price, t.exit_price,
@@ -283,7 +287,7 @@ async function inspect(db, options) {
          WHERE t.status = 'CLOSED' AND UPPER(b.account_type) = 'DEMO'
            ${filters}
          ORDER BY t.closed_at ASC`,
-        closedParams,
+        params,
       )
     ).rows;
 
@@ -377,17 +381,18 @@ async function main() {
     console.log(JSON.stringify({ selfTest: selfTest() }));
     return;
   }
-  const options = { broker: null, from: null, to: null, fingerprints: null };
+  const options = { broker: null, connectionId: process.env.IREXPRO_STATEMENT_CONNECTION_ID || null, from: null, to: null, fingerprints: null };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--broker') options.broker = args[++i];
+    else if (args[i] === '--connection-id') options.connectionId = args[++i];
     else if (args[i] === '--from') options.from = args[++i];
     else if (args[i] === '--to') options.to = args[++i];
     else if (!args[i].startsWith('--')) options.fingerprints = args[i];
   }
   options.fingerprints =
     options.fingerprints || process.env.IREXPRO_STATEMENT_FINGERPRINTS || null;
-  if (!options.fingerprints) {
-    console.error('Usage: node verify-closed-demo-statement-match.cjs <fingerprints.csv> [--broker pepperstone-ctrader] [--from 2026-11-10] [--to 2026-11-24] [--self-test]');
+  if (!options.fingerprints || !options.connectionId) {
+    console.error('Usage: node verify-closed-demo-statement-match.cjs <fingerprints.csv> --connection-id <broker-connection-uuid> [--broker pepperstone-ctrader] [--from 2026-11-10] [--to 2026-11-24] [--self-test]');
     process.exitCode = 2;
     return;
   }

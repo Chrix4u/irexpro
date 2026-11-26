@@ -207,11 +207,24 @@ test('UTC date window does not depend on database timezone', async () => {
   assert.throws(() => utcDayBoundary('2026-11-10T05:00:00'), /INVALID_UTC_DAY/);
   const calls = [];
   const db = { query: async (sql, params) => { calls.push({ sql, params }); return { rows: [] }; } };
-  await inspect(db, { broker: 'pepperstone-ctrader', from: '2026-11-10', to: '2026-11-24', fingerprints: FIXTURE });
+  const connectionId = '00000000-0000-4000-8000-000000000001';
+  await inspect(db, { connectionId, broker: 'pepperstone-ctrader', from: '2026-11-10', to: '2026-11-24', fingerprints: FIXTURE });
   assert.equal(calls[0].sql, 'BEGIN READ ONLY');
-  assert.deepEqual(calls[2].params, ['pepperstone-ctrader', '2026-11-10T00:00:00.000Z', '2026-11-24T00:00:00.000Z']);
-  assert.match(calls[2].sql, /t\.closed_at >= \$2::timestamptz/);
-  assert.match(calls[2].sql, /t\.closed_at < \$3::timestamptz/);
+  for (const call of calls.slice(1, 3)) {
+    assert.deepEqual(call.params, [connectionId, 'pepperstone-ctrader', '2026-11-10T00:00:00.000Z', '2026-11-24T00:00:00.000Z']);
+    assert.match(call.sql, /b\.id = \$1::uuid/);
+    assert.match(call.sql, /t\.closed_at >= \$3::timestamptz/);
+    assert.match(call.sql, /t\.closed_at < \$4::timestamptz/);
+  }
   assert.equal(calls.at(-1).sql, 'ROLLBACK');
   await assert.rejects(inspect(db, { from: '2026-11-24', to: '2026-11-10' }), /INVALID_UTC_WINDOW/);
+});
+
+
+test('missing or malformed broker connection refuses inspection before any SQL', async () => {
+  const { inspect } = require('./verify-closed-demo-statement-match.cjs');
+  const db = { query: async () => { assert.fail('no SQL allowed'); } };
+  for (const connectionId of [undefined, '', 'all', 'invalid']) {
+    await assert.rejects(inspect(db, { connectionId, fingerprints: FIXTURE }), /EXPLICIT_BROKER_CONNECTION_REQUIRED/);
+  }
 });
