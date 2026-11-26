@@ -261,6 +261,26 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify V2 decision-record JSON schema composes with the semantic contract
+        run: node --test apps/api/scripts/research/v2-decision-record-schema.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 calibrator bundles are SHA-pinned and load-time verified
+        run: node --test apps/api/scripts/research/v2-calibrator-bundle.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 purged chronological calibration refuses leakage and unsorted evidence
+        run: node --test apps/api/scripts/research/v2-purged-calibration.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 hold-vs-close shadow protocol stays pre-registered and descriptive-only
+        run: node --test apps/api/scripts/research/v2-hold-vs-close-shadow.test.cjs
+        env:
+          NODE_ENV: test
+
   build:
     name: Build
     runs-on: ubuntu-24.04

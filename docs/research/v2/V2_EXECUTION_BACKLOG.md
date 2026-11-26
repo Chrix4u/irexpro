@@ -19,25 +19,25 @@ Workstreams are ordered by dependency, not priority. "R" = research-only (no run
 
 | ID | Task | Acceptance criteria | Coordination |
 |---|---|---|---|
-| 1.1 | Specify the V2 decision-record schema (C1–C6) as a versioned JSON schema | Schema validates all synthetic fixtures; contract tests green | Builds on #834 evidence coverage |
+| 1.1 | ✅ DONE (2026-11-27): V2 decision-record schema (C1–C6) as a versioned JSON schema | `docs/research/v2/schemas/decision-record-v1.schema.json` + `v2-decision-record-schema.cjs` (+14 tests): canonical hash-stable schema; schema + semantic contract compose; closed record form rejects second confidence key, seventh slot, inline permission fields | Builds on #834 evidence coverage |
 | 1.2 | Supersede-counting persistence design (never first-write-wins) | Design review; migration sketch for a research-side table (no production table changes) | Fixes D-04 documented defect |
 | 1.3 | Outcome-linkage spec: settled fill ↔ decision SHA join contract | Round-trip test on synthetic ledger | Mirrors `order_fill_evidence` pattern |
 
 ## WS2 — Calibration program (R, core of the Challenger)
 
-| ID | Task | Acceptance criteria |
-|---|---|---|
-| 2.1 | Calibrator-in-bundle format: isotonic/Platt serialized, SHA-pinned, load-verified | Load-time verification demo on synthetic bundle |
-| 2.2 | Purged chronological calibration pipeline for the outcome model | Purge ≥ horizon; inner-window-only fit; leakage tests |
-| 2.3 | Calibration monitoring series (Brier/ECE/reliability over time) | Report on synthetic drift fixture |
-| 2.4 | Predicted-vs-realized cost model calibration (commission-inclusive) | Detects the documented 3× understatement case in fixture |
+| ID | Task | Acceptance criteria | Status |
+|---|---|---|---|
+| 2.1 | ✅ DONE (2026-11-27): Calibrator-in-bundle format: isotonic/Platt serialized, SHA-pinned, load-verified | `v2-calibrator-bundle.cjs` (+12 tests): canonical deterministic serialization, real SHA-256 pinning, tamper refusal (params AND metadata), monotonicity enforcement (V1 cap-0.738 defect class refused), calibration state derivable only from holdout evidence ≥100 | Delivered |
+| 2.2 | ✅ DONE (2026-11-27): Purged chronological calibration pipeline for the outcome model | `v2-purged-calibration.cjs` (+10 tests): unsorted-input refusal, two-sided purge (test decisions inside the horizon AND train labels not yet knowable), per-fold SHA-verified bundle path, held-out-only Brier/ECE, CALIBRATED only at ≥100 held-out records, full determinism | Delivered; Stage-1 run pending authorized exports |
+| 2.3 | Calibration monitoring series (Brier/ECE/reliability over time) | Report on synthetic drift fixture | Pending |
+| 2.4 | Predicted-vs-realized cost model calibration (commission-inclusive) | Detects the documented 3× understatement case in fixture | Pending |
 
 ## WS3 — Exit-intelligence research (R; measured top economic lever)
 
 | ID | Task | Acceptance criteria |
 |---|---|---|
 | 3.1 | Exit state machine spec with single precedence order | Spec review; no emergent-authority paths |
-| 3.2 | Pre-registered hold-vs-close counterfactual shadow spec (+1/+15/+60 min, first-touch brackets) | Protocol frozen before any data is examined; fixture tests |
+| 3.2 | ✅ DONE (2026-11-27): Pre-registered hold-vs-close counterfactual shadow spec (+1/+15/+60 min, first-touch brackets) | `V2_HOLD_VS_CLOSE_COUNTERFACTUAL_PROTOCOL.md` + `v2-hold-vs-close-shadow.cjs` (+13 tests): protocol frozen and SHA-pinned before fixture examination; post-freeze amendment refused (PROTOCOL_MISMATCH); worst-case stop-first same-minute rule; PATH_GAP exclusion never imputation; exact two-sided sign test hand-verified; verdict vocabulary structurally cannot adopt/recommend; power honesty table (n=30 ⇒ ~0.36 power at p=0.65); delivered as a frozen protocol, execution pending Stage-1 authorized exports |
 | 3.3 | Profit-retention ladder re-derivation vs measured +0.42R protected class | Analysis doc; no threshold adopted without Stage-1 shadow |
 | 3.4 | Partial-close (scale-out) representability design | Ledger + close-path spec; no dispatch authority |
 | 3.5 | Inherit corpus open questions (5m-guard value, evening scarcity, hour harmonics) as pre-registered experiments | Each has a written hypothesis + power statement |
@@ -76,7 +76,7 @@ Workstreams are ordered by dependency, not priority. "R" = research-only (no run
 
 ## Milestones
 
-- **M1 (research contract frozen):** WS1.1, WS2.1–2.2, WS3.2 protocol pre-registered. Exit: schemas + protocols under review; nothing executed.
+- **M1 (research contract frozen):** WS1.1 ✅, WS2.1 ✅, WS2.2 ✅, WS3.2 ✅ — the decision-record schema, the calibrator bundle format, the purged calibration pipeline and the pre-registered hold-vs-close protocol are all delivered, tested (48 new tests, 106 total V2 tests green) and frozen. Remaining M1 items: WS1.2/1.3 (persistence + linkage specs), WS3.1/3.3–3.5 (exit state machine + ladder re-derivation). Exit: schemas + protocols under review; nothing executed.
 - **M2 (offline Challenger):** WS2.3–2.4, WS4.1–4.3 complete on synthetic/authorized-anonymized data; Stage-0 replay report issued.
 - **M3 (shadow Challenger):** Stage-1 shadow on live feed; decision-record violations = 0 for a full pre-registered window.
 - **M4 (paired DEMO):** WS5.1–5.4 executed with owner authorization; broker-confirmed paired report under equivalence.

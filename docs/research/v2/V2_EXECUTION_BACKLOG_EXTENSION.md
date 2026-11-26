@@ -48,7 +48,20 @@ Research-only. Branch `research/ai-v2-challenger-architecture-20261127`. The pro
 - #836 outstanding statistical corrections; #837 integration review; #838 CI-only mirror lifecycle.
 - Deployment hold `DEPLOY-HOLD-ACTIVE-BROKER-20261122.txt` remains intact.
 
-## Checkpoint — 2026-11-27
+## Checkpoint — 2026-11-27 (M1 milestone slice: research contract frozen)
+
+- Branch `research/ai-v2-challenger-architecture-20261127`, stacked on the combined M1 research candidate (`55c11626`) and the prior V2 slices (`681e670c`, `ebceae3d`, `e7915606`, PR #839 head); nothing in the existing V2 or M1 artifacts was altered.
+- This slice delivered the four M1-milestone workstreams of `V2_EXECUTION_BACKLOG.md`:
+  - **WS1.1** `docs/research/v2/schemas/decision-record-v1.schema.json` + `v2-decision-record-schema.cjs` (+14 tests) — the C1–C6 contract as a versioned, canonically hashable JSON Schema with a self-contained validator; a record is accepted only when schema AND semantic contract both pass.
+  - **WS2.1** `v2-calibrator-bundle.cjs` (+12 tests) — isotonic (PAVA) and Platt calibrators serialized into canonical, SHA-256-pinned, load-time-verified bundles; tampering any value (parameters or metadata) is refused; non-monotone calibrators refused (the V1 cap-0.738 defect class); CALIBRATED state derivable only from holdout evidence ≥100.
+  - **WS2.2** `v2-purged-calibration.cjs` (+10 tests) — purged chronological calibration: unsorted input refused, two-sided purge (test decisions inside the outcome horizon AND train labels not yet knowable at test start), per-fold bundle path fit→serialize→pin→load-verify, held-out-only Brier/ECE, CALIBRATED only at ≥100 held-out records, end-to-end determinism.
+  - **WS3.2** `V2_HOLD_VS_CLOSE_COUNTERFACTUAL_PROTOCOL.md` + `v2-hold-vs-close-shadow.cjs` (+13 tests) — the pre-registered hold-vs-close counterfactual shadow protocol, frozen and SHA-pinned before any fixture path was examined; post-freeze amendment structurally refused; first-touch bracket with worst-case stop-first rule; exact two-sided sign test hand-verified; power honesty table included; verdict vocabulary cannot adopt or recommend.
+- 48 new tests; the whole V2 research suite is 106/106 green; the M1 stack (38 tests) is untouched and green. All tests run offline on synthetic fixtures; no authorized row-level data was accessed; no broker account was created or modified.
+- Milestone M1 status: WS1.1/WS2.1/WS2.2/WS3.2 ✅ frozen. Remaining M1 items: WS1.2/WS1.3 (supersede-counting persistence + fill↔decision linkage specs), WS3.1/3.3–3.5 (exit state machine, profit-retention ladder re-derivation, corpus open questions as pre-registered experiments).
+- Blockers for Stage 1 are unchanged: authorized anonymized exports (RES-V2-01), broker cost export (RES-V2-05).
+- No profitability, edge or production-readiness claim is made or implied by this slice.
+
+## Checkpoint — 2026-11-27 (extension slice)
 
 - Branch `research/ai-v2-challenger-architecture-20261127`, stacked on the combined M1 research candidate (`55c11626`) and the prior V2 slice (`681e670c`, PR #839 head); nothing in the existing V2 or M1 artifacts was altered.
 - This extension delivered: `v2-settled-trade-economics.cjs` (trade-level after-cost economics, deterministic bootstrap CIs, overlap clustering), `v2-challenger-admission.cjs` (lower-bound cost-first admission), `v2-paired-champion-challenger.cjs` (paired statistical comparison), `v2-demo-isolation-topology.cjs` (six-requirement validator) — 4 modules + 4 test files, 35 tests, plus the seven-category audit companion and this backlog extension.
