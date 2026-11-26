@@ -1,3 +1,4 @@
+import { toAdminRecoveryDiagnostics } from './dto/admin-recovery-diagnostics.dto';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, In, MoreThanOrEqual, Repository } from 'typeorm';
@@ -312,6 +313,16 @@ export class AdminLiveAccountService {
       limit: safeLimit,
       offset: safeOffset,
     };
+  }
+
+  /** Latest run for exactly one operator-selected connection. No broker IO. */
+  async getRecoveryDiagnostics(brokerConnectionId: string) {
+    const [run] = await this.runRepo.find({
+      where: { brokerConnectionId },
+      order: { createdAt: 'DESC', id: 'DESC' },
+      take: 1,
+    });
+    return toAdminRecoveryDiagnostics(run);
   }
 
   // ─── GET /admin/live-account/reconciliation/discrepancies ─────────────────

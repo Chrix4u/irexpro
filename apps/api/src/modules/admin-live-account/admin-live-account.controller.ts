@@ -1,4 +1,12 @@
-import { Controller, DefaultValuePipe, Get, ParseIntPipe, Query, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  DefaultValuePipe,
+  Get,
+  ParseIntPipe,
+  ParseUUIDPipe,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -73,6 +81,15 @@ export class AdminLiveAccountController {
       clampPaginationLimit(limit),
       clampPaginationOffset(offset),
     );
+  }
+
+  @Get('reconciliation/recovery-diagnostics')
+  @ApiOperation({ summary: 'Latest recovery diagnostics for one broker connection (admin only)' })
+  @ApiQuery({ name: 'brokerConnectionId', required: true, type: String })
+  async getRecoveryDiagnostics(
+    @Query('brokerConnectionId', new ParseUUIDPipe()) brokerConnectionId: string,
+  ) {
+    return this.adminLiveAccountService.getRecoveryDiagnostics(brokerConnectionId);
   }
 
   @Get('reconciliation/discrepancies')

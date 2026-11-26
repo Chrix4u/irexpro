@@ -209,3 +209,14 @@ All items below are open engineering work unless explicitly supported by a linke
 - #831 merged (`87a58926`) after nine CI checks passed, including native mobile typecheck/bundle and installable Android preview APK ([CI run](https://github.com/Chrix4u/irexpro/actions/runs/45842396552)). MOB-04/05 dashboard presentation correction verified in CI; physical-device verification remains open. APK is a preview build, not a store-certified release.
 - #832 shared dialog accessibility candidate: scrollable content, bounded height, wrapping action buttons, busy-state semantics and reduced-motion support. Mobile CI pending. Test on small Android/iOS screens, landscape and enlarged system text; verify long details scroll, buttons remain reachable, busy dialogs cannot be dismissed, and reduced motion disables transition. Do not mark on-device acceptance complete without evidence.
 - Resume: verify #832 latest CI; continue MOB-04/05 and MOB-03 acceptance. Historical statement reconciliation and release authorization remain outstanding; no financial record or trading authority changes, and no VPS deployment in this session.
+
+### Reconciliation recovery checkpoint — 2026-11-26
+
+- [ ] P0 ACC-06: Review #841 complete-history retrieval. CI passed; verify inclusive time bounds with authorized non-mutating DEMO provider evidence before any runtime use. Incomplete/ambiguous history must remain unproven.
+- [ ] P0 ACC-07: Review #842 per-run diagnostic counts. Confirm reason taxonomy, selected-candidate accounting, no change in proof or execution authority, and regression results.
+- [ ] P0 ADMIN-02: Integrate scoped read-only latest-run diagnostics in Admin Live Operations; verify authorization, connection isolation, invalid metadata, legacy/missing runs, and independent panel failure handling.
+- [ ] P0 ADMIN-03: Design operator-triggered read-only broker-versus-statement comparison; distinguish financial evidence from settlement authorization, ensure explicit account scope, private evidence handling, and bounded execution. Do not trigger the existing execution-capable worker from the diagnostic UI.
+- [ ] P0 OPS-04: Review a separate evidence-based maintenance-lock design for current exposure versus historical journal drift, without weakening existing release checks; require independent review and guarded staging validation.
+- [ ] P0 ACC-08: Verify authenticated DEMO reconciliation outcomes and the dashboard with the deployed exact revision before marking the incident resolved.
+
+Next: finish CI/review of diagnostics and UI, then the read-only statement comparison slice. Runtime and account-specific verification remain open. No financial records or release safeguards were modified by this checkpoint.
