@@ -83,7 +83,10 @@ describe('LiveAccountService', () => {
   let discrepancyRepo: { find: jest.Mock };
   let auditRepo: { find: jest.Mock; count: jest.Mock };
   let riskProfileRepo: { findOne: jest.Mock };
-  let brokerService: { isConnectionExecutable: jest.Mock; getDisplayPositionsForConnection: jest.Mock };
+  let brokerService: {
+    isConnectionExecutable: jest.Mock;
+    getDisplayPositionsForConnection: jest.Mock;
+  };
 
   const connection = (overrides: Partial<BrokerConnection> = {}): BrokerConnection =>
     ({
@@ -1249,18 +1252,42 @@ describe('LiveAccountService', () => {
   describe('getPositions', () => {
     it('displays scoped native P&L with no spot quote and does not substitute a mismatched order id', async () => {
       tradeRepo.find.mockResolvedValue([
-        trade({ id: 'matched', accountCurrency: 'USD', externalPositionId: 'p1', externalOrderId: 'o1' }),
-        trade({ id: 'missing', accountCurrency: 'USD', externalPositionId: 'p2', externalOrderId: 'p1' }),
+        trade({
+          id: 'matched',
+          accountCurrency: 'USD',
+          externalPositionId: 'p1',
+          externalOrderId: 'o1',
+        }),
+        trade({
+          id: 'missing',
+          accountCurrency: 'USD',
+          externalPositionId: 'p2',
+          externalOrderId: 'p1',
+        }),
       ]);
       brokerService.getDisplayPositionsForConnection.mockResolvedValue({
-        positions: [{
-          externalOrderId: 'p1', currentPrice: null, unrealisedPnl: '12.34',
-          markSource: 'PROVIDER', markObservedAt: NOW, commission: '0', swap: '0',
-        }],
+        positions: [
+          {
+            externalOrderId: 'p1',
+            currentPrice: null,
+            unrealisedPnl: '12.34',
+            markSource: 'PROVIDER',
+            markObservedAt: NOW,
+            commission: '0',
+            swap: '0',
+          },
+        ],
       });
       const view = await service.getPositions(USER_ID, 'conn-1');
-      expect(brokerService.getDisplayPositionsForConnection).toHaveBeenCalledWith('conn-1', USER_ID);
-      expect(view.positions[0]).toMatchObject({ id: 'matched', currentPrice: null, unrealisedPnl: '12.34' });
+      expect(brokerService.getDisplayPositionsForConnection).toHaveBeenCalledWith(
+        'conn-1',
+        USER_ID,
+      );
+      expect(view.positions[0]).toMatchObject({
+        id: 'matched',
+        currentPrice: null,
+        unrealisedPnl: '12.34',
+      });
       expect(view.positions[1]).toMatchObject({ id: 'missing', unrealisedPnl: null });
     });
 
