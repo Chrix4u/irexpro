@@ -99,6 +99,61 @@ function parseFingerprints(csvText) {
   return rows;
 }
 
+// cTrader UTC Deals export. Strictly translate the supported unquoted layout
+// into the existing fingerprint schema; never derive a deal from a balance row.
+// Reject unsupported formats instead of silently omitting economic evidence.
+function parseStatementInput(csvText) {
+  const text = csvText.replace(/^\uFEFF/, '');
+  const lines = text.split(/\r?\n/);
+  if (lines[0]?.trim() !== 'Deals') return parseFingerprints(text);
+  const expected = 'Symbol,Opening direction,Closing time (UTC+0),Entry price,Closing price,Closing quantity,Net USD,Balance USD';
+  if (lines[1]?.trim() !== expected) throw new Error('UNSUPPORTED_DEALS_HEADER');
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const output = ['symbol,opening_direction,closing_time_utc,entry_price,closing_price,closing_quantity_lots,net_usd'];
+  let total = 0n;
+  let foundTotal = false;
+  let foundSummary = false;
+  for (let i = 2; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    if (line === 'Summary') {
+      foundSummary = true;
+      break;
+    }
+    const cells = line.split(',').map((cell) => cell.trim());
+    if (cells.length !== 8) throw new Error('INVALID_DEALS_ROW');
+    if (cells.slice(0, 6).every((cell) => cell === '') && cells[7] === '') {
+      const net = decimalToScaled(normalizeDecimals(cells[6]), 8);
+      if (foundTotal || net === null || net !== total) throw new Error('DEALS_TOTAL_MISMATCH');
+      foundTotal = true;
+      continue;
+    }
+    if (foundTotal) throw new Error('UNEXPECTED_DEAL_AFTER_TOTAL');
+    const [symbol, side, timestamp, entryRaw, exitRaw, quantity, netRaw, balanceRaw] = cells;
+    const date = /^(\d{2}) ([A-Z][a-z]{2}) (\d{4}) (\d{2}):(\d{2}):(\d{2})\.(\d{3})$/.exec(timestamp);
+    const qty = /^(\d+(?:\.\d+)?)\s+Lots?$/.exec(quantity);
+    if (!date || !qty || !/^[A-Z0-9._-]+$/.test(symbol) || !['BUY', 'SELL'].includes(side.toUpperCase())) {
+      throw new Error('INVALID_DEAL_FORMAT');
+    }
+    const [, day, month, year, hour, minute, second, millis] = date;
+    const monthIndex = months.indexOf(month);
+    if (monthIndex < 0) throw new Error('INVALID_DEAL_UTC_TIMESTAMP');
+    const iso = year + '-' + String(monthIndex + 1).padStart(2, '0') + '-' + day +
+      'T' + hour + ':' + minute + ':' + second + '.' + millis + 'Z';
+    const parsed = new Date(iso);
+    if (!Number.isFinite(parsed.getTime()) || parsed.toISOString() !== iso) throw new Error('INVALID_DEAL_UTC_TIMESTAMP');
+    const [entry, exit, lots, net, balance] = [entryRaw, exitRaw, qty[1], netRaw, balanceRaw].map(normalizeDecimals);
+    if ([entry, exit, lots, net, balance].some((value) => value === null) ||
+      [entry, exit, lots].some((value) => compareDecimal(value, '0') !== 1)) throw new Error('INVALID_DEAL_ECONOMICS');
+    const scaledNet = decimalToScaled(net, 8);
+    if (scaledNet === null) throw new Error('INVALID_DEAL_NET');
+    total += scaledNet;
+    output.push([symbol, side, iso, entry, exit, lots, net].join(','));
+  }
+  if (!foundTotal || !foundSummary || output.length < 2) throw new Error('INCOMPLETE_DEALS_SECTION');
+  return parseFingerprints(output.join('\n'));
+}
+
 function economicKey(row) {
   return [row.symbol, row.openingDirection, row.day, row.entry, row.exit, row.lots].join('|');
 }
@@ -350,7 +405,7 @@ async function inspect(db, options) {
       )
     ).rows;
 
-    const statementRows = parseFingerprints(fs.readFileSync(options.fingerprints, 'utf-8'));
+    const statementRows = parseStatementInput(fs.readFileSync(options.fingerprints, 'utf-8'));
     const strandedMatch = matchStranded(stranded, statementRows);
     const closedMatch = matchClosedTrades(closed, statementRows);
     const pnl = checkPnlComposition(closed, statementRows);
@@ -477,4 +532,4 @@ async function main() {
 if (require.main === module) {
   main().catch(() => { console.error('Statement match verification failed'); process.exitCode = 1; });
 }
-module.exports = { parseFingerprints, matchStranded, matchClosedTrades, checkPnlComposition, summarize, compareDecimal, normalizeDecimals, economicKey, utcDayBoundary, inspect, summarizeUnmatchedEconomics };
+module.exports = { parseFingerprints, parseStatementInput, matchStranded, matchClosedTrades, checkPnlComposition, summarize, compareDecimal, normalizeDecimals, economicKey, utcDayBoundary, inspect, summarizeUnmatchedEconomics };
