@@ -1,6 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Trade, TradeDirection, TradeStatus } from '../../execution/entities/trade.entity';
-import { BrokerMode, type BrokerPositionDisplay } from '../../broker/interfaces/broker-adapter.interface';
+import {
+  BrokerMode,
+  type BrokerPositionDisplay,
+} from '../../broker/interfaces/broker-adapter.interface';
 import { LiveAccountEnvironment, LivePositionStatus } from './live-account.enums';
 
 export class LiveTradePathDiagnosticsDto {
