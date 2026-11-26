@@ -411,6 +411,16 @@ describe('ReconciliationResolutionService', () => {
         { id: 'trade-1', status: TradeStatus.OPEN },
         expect.objectContaining({ exitPrice: null, realisedPnl: null }),
       );
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: AuditAction.TRADE_CLOSED,
+          metadata: expect.objectContaining({
+            providerClosedAt: null,
+            internalClosedAt: expect.any(String),
+            closeTimeSource: 'LOCAL_RECONCILIATION_OBSERVATION',
+          }),
+        }),
+      );
     });
 
     it('returns false (no double mutation) when the guarded update loses the race', async () => {
