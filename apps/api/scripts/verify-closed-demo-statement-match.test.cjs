@@ -228,3 +228,51 @@ test('missing or malformed broker connection refuses inspection before any SQL',
     await assert.rejects(inspect(db, { connectionId, fingerprints: FIXTURE }), /EXPLICIT_BROKER_CONNECTION_REQUIRED/);
   }
 });
+
+test('unmatched economic diagnostics classify a single difference without matching or settling', () => {
+  const { summarizeUnmatchedEconomics } = require('./verify-closed-demo-statement-match.cjs');
+  const statement = parseFingerprints(
+    'symbol,opening_direction,closing_time_utc,entry_price,closing_price,closing_quantity_lots,net_usd\n' +
+    'EURUSD,BUY,2026-01-03T12:00:00Z,1.1,1.2,1,10\n',
+  );
+  const trade = { id: 'synthetic', instrument: 'EURUSD', direction: 'BUY',
+    closed_at: '2026-01-03T12:00:00Z', fill_price: '1.1', exit_price: '1.2', lot_size: '1' };
+  const scenarios = [
+    [{ fill_price: '1.11' }, 'DIFFERENT_ENTRY_PRICE'],
+    [{ exit_price: '1.21' }, 'DIFFERENT_EXIT_PRICE'],
+    [{ lot_size: '2' }, 'DIFFERENT_LOT_SIZE'],
+    [{ closed_at: '2026-01-04T12:00:00Z' }, 'DIFFERENT_UTC_DAY'],
+    [{ direction: 'SELL' }, 'DIFFERENT_DIRECTION'],
+    [{ instrument: 'GBPUSD' }, 'DIFFERENT_INSTRUMENT'],
+    [{ exit_price: null }, 'MISSING_OR_INVALID_EXIT_PRICE'],
+    [{ closed_at: 'invalid' }, 'MISSING_OR_INVALID_UTC_DAY'],
+    [{ fill_price: '1.11', lot_size: '2' }, 'NO_SINGLE_FIELD_CANDIDATE'],
+  ];
+  for (const [patch, reason] of scenarios) {
+    const closedMatch = matchClosedTrades([{ ...trade, ...patch }], statement);
+    assert.equal(closedMatch.matched.length, 0);
+    assert.equal(closedMatch.unmatchedTrades.length, 1);
+    assert.deepEqual(summarizeUnmatchedEconomics(closedMatch), {
+      diagnosticOnly: true, statementDealsExamined: 1, unmatchedTradesExamined: 1,
+      reasonCounts: { [reason]: 1 },
+    });
+  }
+  const matched = matchClosedTrades([trade], statement);
+  assert.equal(matched.matched.length, 1);
+  assert.deepEqual(summarizeUnmatchedEconomics(matched).reasonCounts, {});
+});
+
+test('single-field diagnostic never chooses between competing candidate trades or deals', () => {
+  const { summarizeUnmatchedEconomics } = require('./verify-closed-demo-statement-match.cjs');
+  const statement = parseFingerprints(
+    'symbol,opening_direction,closing_time_utc,entry_price,closing_price,closing_quantity_lots,net_usd\n' +
+    'EURUSD,BUY,2026-01-03T12:00:00Z,1.1,1.2,1,10\n',
+  );
+  const trade = { id: 'synthetic', instrument: 'EURUSD', direction: 'BUY',
+    closed_at: '2026-01-03T12:00:00Z', fill_price: '1.1', exit_price: '1.21', lot_size: '1' };
+  const competingTrades = matchClosedTrades([trade, { ...trade, id: 'other' }], statement);
+  assert.deepEqual(summarizeUnmatchedEconomics(competingTrades).reasonCounts, { AMBIGUOUS_SINGLE_FIELD_CANDIDATES: 1 });
+  const competingDeals = matchClosedTrades([trade], [...statement, { ...statement[0] }]);
+  assert.deepEqual(summarizeUnmatchedEconomics(competingDeals).reasonCounts, { AMBIGUOUS_SINGLE_FIELD_CANDIDATES: 2 });
+  assert.equal(competingDeals.matched.length, 0);
+});
