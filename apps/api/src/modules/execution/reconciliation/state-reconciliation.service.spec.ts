@@ -1001,6 +1001,57 @@ describe('StateReconciliationService', () => {
   });
 
   describe('runForConnection — mismatches', () => {
+    it('uses the exact persisted native DEMO position ID before inferring an external close', async () => {
+      const trade = {
+        ...openTrade(),
+        externalOrderId: '123456',
+        externalPositionId: null,
+        fillPrice: '1.10000',
+      } as Trade;
+      const linked = {
+        ...pendingOrder(),
+        tradeId: trade.id,
+        providerOrderId: '123456',
+        providerPositionId: '654321',
+        orderKind: OrderKind.MARKET,
+        status: OrderStatus.FILLED,
+        instrument: trade.instrument,
+        direction: trade.direction,
+        filledQuantity: '1.0000',
+        avgFillPrice: '1.10000',
+      } as Order;
+      const position = {
+        externalOrderId: '654321',
+        instrument: trade.instrument,
+        direction: trade.direction,
+        lotSize: '1.0000',
+        openPrice: '1.10000',
+        currentPrice: '1.10001',
+        stopLoss: '1.09000',
+        takeProfit: '1.12000',
+        unrealisedPnl: '1.00',
+        openedAt: trade.openedAt,
+        commission: '0.00',
+        swap: '0.00',
+      };
+      tradeRepo.find.mockResolvedValueOnce([trade]).mockResolvedValueOnce([]);
+      orderRepo.find.mockResolvedValueOnce([]).mockResolvedValueOnce([linked]);
+      adapter.getOpenPositions.mockResolvedValue([position]);
+      adapter.getPositionById.mockImplementation(async (id: string) =>
+        id === '654321' ? position : null,
+      );
+      await service.runForConnection({
+        ...connection(),
+        brokerId: 'pepperstone-ctrader',
+      } as BrokerConnection);
+
+      expect(adapter.getPositionById).toHaveBeenCalledWith('654321');
+      expect(adapter.getPositionById).not.toHaveBeenCalledWith('123456');
+      expect(resolution.closeTradeFromProvider).not.toHaveBeenCalled();
+      expect(allocationService.releaseAllocationForIntent).not.toHaveBeenCalled();
+      expect(trade.externalPositionId).toBeNull();
+    });
+
     it('persists detected discrepancies and surfaces NEW ones (events + audits)', async () => {
       tradeRepo.find.mockResolvedValue([openTrade()]);
       adapter.getPositionById.mockResolvedValue(null); // position gone
