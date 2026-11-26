@@ -569,3 +569,52 @@ export function maskActorUserId(userId: string | null): string {
   if (userId.length <= 14) return userId;
   return `${userId.slice(0, 9)}…${userId.slice(-4)}`;
 }
+
+
+export interface AdminRecoveryScope {
+  selected: number;
+  outcomes: Record<string, number>;
+}
+
+export interface AdminRecoveryRun {
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'COMPLETED_WITH_WARNINGS' | 'FAILED';
+  startedAt: string | null;
+  completedAt: string | null;
+  diagnostics: { recent: AdminRecoveryScope; aged: AdminRecoveryScope } | null;
+}
+
+function isRecoveryScope(value: unknown): value is AdminRecoveryScope {
+  if (!isRecord(value) || !isNonNegativeInteger(value.selected) || !isRecord(value.outcomes)) {
+    return false;
+  }
+  const counts = Object.values(value.outcomes);
+  return counts.every(isNonNegativeInteger) && counts.reduce<number>((sum, n) => sum + Number(n), 0) === value.selected;
+}
+
+function isRecoveryRun(value: unknown): value is AdminRecoveryRun {
+  if (!isRecord(value)) return false;
+  const statuses = ['PENDING', 'RUNNING', 'COMPLETED', 'COMPLETED_WITH_WARNINGS', 'FAILED'];
+  if (
+    typeof value.status !== 'string' ||
+    !statuses.includes(value.status) ||
+    !isNullableString(value.startedAt) ||
+    !isNullableString(value.completedAt)
+  ) return false;
+  return value.diagnostics === null ||
+    (isRecord(value.diagnostics) &&
+      isRecoveryScope(value.diagnostics.recent) &&
+      isRecoveryScope(value.diagnostics.aged));
+}
+
+export async function loadAdminRecoveryDiagnostics(
+  brokerConnectionId: string,
+): Promise<AdminRecoveryRun | null> {
+  const params = new URLSearchParams({ brokerConnectionId });
+  const payload = await api.request<unknown>(
+    `/admin/live-account/reconciliation/recovery-diagnostics?${params.toString()}`,
+  );
+  if (payload !== null && !isRecoveryRun(payload)) {
+    throw new Error('Recovery diagnostics contract mismatch');
+  }
+  return payload;
+}
