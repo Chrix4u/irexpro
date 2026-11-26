@@ -1902,7 +1902,9 @@ export class BrokerService {
     connectionId: string,
     userId: string,
   ): Promise<{ connection: BrokerConnection; positions: BrokerPosition[] }> {
-    return this.readConnectionPositions(connectionId, userId, (adapter) => adapter.getOpenPositions());
+    return this.readConnectionPositions(connectionId, userId, (adapter) =>
+      adapter.getOpenPositions(),
+    );
   }
 
   /** Dashboard-only partial marks; the execution/reconciliation method stays strict. */
@@ -1911,7 +1913,9 @@ export class BrokerService {
     userId: string,
   ): Promise<{ connection: BrokerConnection; positions: BrokerPositionDisplay[] }> {
     return this.readConnectionPositions<BrokerPositionDisplay>(connectionId, userId, (adapter) =>
-      adapter.getOpenPositionDisplay ? adapter.getOpenPositionDisplay() : adapter.getOpenPositions(),
+      adapter.getOpenPositionDisplay
+        ? adapter.getOpenPositionDisplay()
+        : adapter.getOpenPositions(),
     );
   }
 
