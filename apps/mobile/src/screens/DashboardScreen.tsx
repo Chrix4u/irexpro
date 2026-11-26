@@ -87,7 +87,7 @@ export default function DashboardScreen({
   );
 
   const brokerReadinessMismatch =
-    onboarding !== null &&
+    !loading && onboarding !== null &&
     brokerTransportConnected !== null &&
     onboarding.brokerConnected !== brokerTransportConnected;
 
@@ -103,12 +103,12 @@ export default function DashboardScreen({
       return {
         label: effectiveBrokerConnected
           ? 'Review broker readiness'
-          : 'Connect broker',
+          : brokerTransportConnected === null ? 'Review broker connection' : 'Connect broker',
         action: onOpenBroker,
       };
     }
     return null;
-  }, [effectiveBrokerConnected, onOpenBroker, onOpenEligibility, onOpenProfile, onboarding]);
+  }, [brokerTransportConnected, effectiveBrokerConnected, onOpenBroker, onOpenEligibility, onOpenProfile, onboarding]);
 
   const completedSteps = onboarding
     ? [
@@ -137,7 +137,7 @@ export default function DashboardScreen({
       <View style={styles.hero}>
         <View style={styles.heroGlow} />
         <Text style={styles.eyebrow}>IREXPRO · MOBILE</Text>
-        <Text style={styles.title}>Trading command center</Text>
+        <Text accessibilityRole="header" style={styles.title}>Dashboard</Text>
         <Text style={styles.subtitle}>
           Your account and broker setup.
         </Text>
@@ -166,11 +166,15 @@ export default function DashboardScreen({
 
       {error ? <Banner variant="error">{error}</Banner> : null}
 
+      {!loading && brokerTransportConnected === null ? (
+        <Banner variant="info">Broker status unavailable. Refresh to check again.</Banner>
+      ) : null}
+
       {brokerReadinessMismatch ? (
         <Banner variant="info">
           {brokerTransportConnected
-            ? 'Broker transport is connected, but trading readiness has not reconciled yet. Trading remains blocked until the server readiness gate confirms it.'
-            : 'Trading readiness still references a broker connection, but the live broker list is not currently connected. Refresh Broker before starting AI Trading.'}
+            ? 'Broker status and account readiness differ. Review the broker connection.'
+            : 'The broker list does not confirm the reported connection. Refresh to review.'}
         </Banner>
       ) : null}
 
@@ -182,7 +186,7 @@ export default function DashboardScreen({
           ]}
         >
           <View style={styles.readinessHeaderCopy}>
-            <Text style={styles.readinessTitle}>AI trading readiness</Text>
+            <Text accessibilityRole="header" style={styles.readinessTitle}>AI trading readiness</Text>
             <Text style={styles.readinessDescription}>
               Server-verified account status.
             </Text>
@@ -222,13 +226,13 @@ export default function DashboardScreen({
             <ReadinessRow
               index="03"
               label="Broker connection"
-              complete={effectiveBrokerConnected}
+              complete={brokerTransportConnected}
               compact={compact}
             />
             <ReadinessRow
               index="04"
               label="Trading readiness"
-              complete={readiness.label === 'READY'}
+              complete={readiness.label === 'UNVERIFIED' || readiness.label === 'REVIEW_REQUIRED' ? null : readiness.label === 'READY'}
               compact={compact}
               last
             />
@@ -250,7 +254,9 @@ export default function DashboardScreen({
               <ActionButton label="Refresh readiness" onPress={onRefresh} />
             )}
           </>
-        ) : null}
+        ) : (
+          <ActionButton label="Refresh readiness" onPress={onRefresh} />
+        )}
       </Card>
 
       <SectionHeader
@@ -293,7 +299,7 @@ function ReadinessRow({
 }: {
   index: string;
   label: string;
-  complete: boolean;
+  complete: boolean | null;
   compact?: boolean;
   last?: boolean;
 }) {
@@ -314,8 +320,8 @@ function ReadinessRow({
         <Text style={styles.statusText}>{label}</Text>
       </View>
       <StatusPill
-        status={complete ? 'COMPLETE' : 'PENDING'}
-        tone={complete ? 'positive' : 'warning'}
+        status={complete === null ? 'UNVERIFIED' : complete ? 'COMPLETE' : 'PENDING'}
+        tone={complete === null ? 'neutral' : complete ? 'positive' : 'warning'}
       />
     </View>
   );
