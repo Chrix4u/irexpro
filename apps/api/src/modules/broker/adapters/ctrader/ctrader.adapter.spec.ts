@@ -1489,7 +1489,14 @@ describe('CTraderAdapter', () => {
       });
     });
 
-    it.each(['account', 'order', 'related-order', 'multiple-positions'])(
+    it.each([
+      'account',
+      'missing-account',
+      'order',
+      'related-order',
+      'multiple-positions',
+      'zero-position',
+    ])(
       'rejects inconsistent order-details identity: %s',
       async (fault) => {
         server.on(CTRADER_PAYLOAD_TYPE.ORDER_DETAILS_REQ, (payload, envelope) =>
@@ -1497,12 +1504,17 @@ describe('CTraderAdapter', () => {
             CTRADER_PAYLOAD_TYPE.ORDER_DETAILS_RES,
             {
               ctidTraderAccountId:
-                fault === 'account'
-                  ? Number(payload.ctidTraderAccountId) + 1
-                  : payload.ctidTraderAccountId,
+                fault === 'missing-account'
+                  ? undefined
+                  : fault === 'account'
+                    ? Number(payload.ctidTraderAccountId) + 1
+                    : payload.ctidTraderAccountId,
               order: { orderId: fault === 'order' ? 778 : 777 },
               deal: [
-                { orderId: fault === 'related-order' ? 778 : 777, positionId: 7001 },
+                {
+                  orderId: fault === 'related-order' ? 778 : 777,
+                  positionId: fault === 'zero-position' ? 0 : 7001,
+                },
                 { orderId: 777, positionId: fault === 'multiple-positions' ? 7002 : 7001 },
               ],
             },
