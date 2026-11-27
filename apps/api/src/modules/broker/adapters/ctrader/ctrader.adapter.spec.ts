@@ -1080,6 +1080,39 @@ describe('CTraderAdapter', () => {
   };
 
   describe('getOpenPositions / getPositionById', () => {
+    it.each([
+      { position: null },
+      { position: {} },
+      { order: null },
+      { position: [{ ...SAMPLE_POSITION, positionStatus: 999 }] },
+      { position: [{ ...SAMPLE_POSITION, positionId: 0 }] },
+      { position: [SAMPLE_POSITION, SAMPLE_POSITION] },
+      { ctidTraderAccountId: 999999999 },
+      { ctidTraderAccountId: undefined },
+    ])('rejects an invalid snapshot rather than reporting a missing position', async (patch) => {
+      await connectDemo();
+      server.on(CTRADER_PAYLOAD_TYPE.RECONCILE_REQ, (payload, envelope) =>
+        echo(
+          CTRADER_PAYLOAD_TYPE.RECONCILE_RES,
+          { ctidTraderAccountId: payload.ctidTraderAccountId, position: [], order: [], ...patch },
+          envelope,
+        ),
+      );
+      await expect(adapter.getPositionById('7654321')).rejects.toThrow(BrokerAdapterError);
+    });
+
+    it('preserves legitimate empty repeated fields from the authorized account', async () => {
+      await connectDemo();
+      server.on(CTRADER_PAYLOAD_TYPE.RECONCILE_REQ, (payload, envelope) =>
+        echo(
+          CTRADER_PAYLOAD_TYPE.RECONCILE_RES,
+          { ctidTraderAccountId: payload.ctidTraderAccountId },
+          envelope,
+        ),
+      );
+      await expect(adapter.getPositionById('7654321')).resolves.toBeNull();
+    });
+
     it('returns independently observed broker P&L without requesting a spot quote', async () => {
       scriptReconcile([SAMPLE_POSITION], []);
       server.on(CTRADER_PAYLOAD_TYPE.GET_POSITION_UNREALIZED_PNL_REQ, (payload, envelope) =>
