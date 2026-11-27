@@ -120,10 +120,10 @@ describe('aged cTrader-family DEMO closed-order proof (no freshness fence)', () 
     expect(reasonOf(proveAged({ providerClosedDeals: [{ ...deal, lotSize: '1.4' }] }))).toBe(
       'EXACT_BROKER_CLOSE_DEAL_ECONOMICS_MISMATCH',
     );
-    expect(reasonOf(proveAged({ providerClosedDeals: [] }))).toBe('PROVIDER_DEAL_NOT_UNIQUE');
+    expect(reasonOf(proveAged({ providerClosedDeals: [] }))).toBe('PROVIDER_DEAL_ABSENT');
     expect(
       reasonOf(proveAged({ providerClosedDeals: [deal, { ...deal, externalOrderId: '8422910' }] })),
-    ).toBe('PROVIDER_DEAL_NOT_UNIQUE');
+    ).toBe('PROVIDER_DEAL_MULTIPLE');
   });
 
   it('rejects future close timestamps and malformed provenance like the live path', () => {

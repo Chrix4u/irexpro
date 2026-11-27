@@ -170,7 +170,8 @@ function proveDemoClosedOrderFillCore(
   if (compareDecimal(qty, lots) !== 0) return no('CLOSE_QUANTITY_LOT_MISMATCH');
   if (compareDecimal(price, '0') <= 0) return no('CLOSE_TRADE_EXIT_PRICE_NONPOSITIVE');
   const matches = providerClosedDeals.filter((d) => d.externalOrderId === ref);
-  if (matches.length !== 1) return no('PROVIDER_DEAL_NOT_UNIQUE');
+  if (matches.length === 0) return no('PROVIDER_DEAL_ABSENT');
+  if (matches.length > 1) return no('PROVIDER_DEAL_MULTIPLE');
   const deal = matches[0];
   if (
     deal.instrument !== order.instrument ||
