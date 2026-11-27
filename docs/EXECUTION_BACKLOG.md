@@ -293,3 +293,13 @@ Next: finish CI/review of diagnostics and UI, then the read-only statement compa
 
 
 **Subsequent cleanup checkpoint:** Verified complete removal of 13 recoverable Git worktrees and 22 disposable test environments; all 35 paths confirmed absent. Exact remote recovery references, allocated directory bytes, filesystem deltas and paths remain in the restricted server audit log. Web and API liveness/readiness returned HTTP 200 after cleanup; database service and backup job status checked. Shared deployment lock became busy again, so the next destructive batch failed closed. Full storage consolidation, release-artifact restoration, authenticated workflow validation and retention activation remain open.
+
+
+### Single-source customer handover and runtime-only hosting
+
+- [x] Verify the authoritative monorepo includes apps/web, apps/admin, apps/api, apps/mobile, services/ai-engine, services/mt5-connector and shared packages, plus deployment configuration and lockfiles.
+- [x] Identify the existing staging deployment's remaining VPS dependency installation and compilation steps; these are migration gaps, not completed GitHub-first deployment.
+- [ ] Build and test an immutable release from a tagged, reviewed commit on hosted GitHub Actions; include the required approved model assets with explicit provenance and checksums, runtime dependencies, web/admin/API outputs, migration tooling and install/upgrade/rollback instructions. Publish mobile/connector packages as separate platform-specific assets associated with the same release manifest.
+- [ ] Rehearse a new installation on a disposable clean Linux environment using only the release artifact, generated customer credentials and new database; test health, login, admin, demo broker integration with authorized test credentials and rollback. Do not include production environment files, account history, private evidence or personal data.
+- [ ] Move live services to a single stable runtime entry path only after coordinated quiescence and compatible rollback validation; keep one active and one verified rollback. Remove old source checkouts and release directories only after recovery proof and preservation of legitimate work. Existing hosting configuration and persistent data must remain intact.
+- [ ] Produce a customer handover checklist and versioned release manifest; separately authorize source-code transfer under the applicable contract, never hand over a copy of the production server.
