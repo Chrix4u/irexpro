@@ -81,7 +81,13 @@ describe('ExecutionReadService trading-cost accounting', () => {
     // Otherwise a NULL commission or swap is silently treated as zero.
     for (const [expression, alias] of summaryQuery.addSelect.mock.calls) {
       if (alias === 'totalTrades') continue;
-      for (const field of ['realised_pnl', 'commission', 'swap', 'exit_price', 'account_currency']) {
+      for (const field of [
+        'realised_pnl',
+        'commission',
+        'swap',
+        'exit_price',
+        'account_currency',
+      ]) {
         expect(expression).toContain(`"trade"."${field}" IS NOT NULL`);
       }
     }
