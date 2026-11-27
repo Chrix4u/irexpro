@@ -3057,3 +3057,102 @@
     animation: none;
   }
 }
+
+/* History cards resize by their available content width, including with the
+   navigation sidebar open. Long status badges must never size a grid track. */
+.ai-history-card {
+  container: trade-history / inline-size;
+}
+
+.ai-history-card .ai-section__heading {
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.ai-history-card .ai-section__heading > :first-child {
+  flex: 1 1 13rem;
+  min-width: 0;
+}
+
+.ai-history-card .ai-section__heading-actions {
+  flex-shrink: 0;
+}
+
+.ai-history-card .ai-activity-list {
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+}
+
+.ai-history-card .ai-activity-row {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+}
+
+.ai-history-card .ai-activity-row > * {
+  min-width: 0;
+}
+
+.ai-history-card .ai-activity-row__state {
+  align-items: center;
+}
+
+.ai-history-card .ai-activity-row__state > * {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.ai-activity-row__settlement-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  background: rgba(148, 163, 184, 0.08);
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.5;
+  overflow-wrap: break-word;
+}
+
+.ai-activity-row__settlement-note[role="status"] {
+  border-inline-start: 2px solid #f59e0b;
+}
+
+.ai-history-card .ai-order-detail-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.ai-history-card .ai-order-detail-grid > div {
+  padding: 0.45rem 0.5rem;
+  align-content: start;
+}
+
+.ai-history-card .ai-order-detail-grid span,
+.ai-history-card .ai-order-detail-grid strong,
+.ai-history-card .ai-activity-row__reason,
+.ai-history-card .ai-activity-row__time {
+  overflow-wrap: break-word;
+}
+
+@container trade-history (max-width: 390px) {
+  .ai-history-card .ai-order-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ai-history-card .ai-activity-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-history-card .ai-activity-row__state {
+    justify-content: flex-start;
+  }
+}
+
+@container trade-history (max-width: 240px) {
+  .ai-history-card .ai-order-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
