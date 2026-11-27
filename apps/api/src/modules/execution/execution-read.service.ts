@@ -304,18 +304,36 @@ export class ExecutionReadService {
       .addSelect(settledOnly('COUNT(CASE WHEN trade.realisedPnl > 0 THEN 1 END)'), 'wins')
       .addSelect(settledOnly('COUNT(CASE WHEN trade.realisedPnl < 0 THEN 1 END)'), 'losses')
       .addSelect(settledOnly('COUNT(CASE WHEN trade.realisedPnl = 0 THEN 1 END)'), 'flats')
-      .addSelect(sum('CASE WHEN trade.realisedPnl > 0 THEN trade.realisedPnl ELSE 0 END'), 'grossProfit')
-      .addSelect(sum('CASE WHEN trade.realisedPnl < 0 THEN -trade.realisedPnl ELSE 0 END'), 'grossLoss')
+      .addSelect(
+        sum('CASE WHEN trade.realisedPnl > 0 THEN trade.realisedPnl ELSE 0 END'),
+        'grossProfit',
+      )
+      .addSelect(
+        sum('CASE WHEN trade.realisedPnl < 0 THEN -trade.realisedPnl ELSE 0 END'),
+        'grossLoss',
+      )
       .addSelect(sum('trade.realisedPnl'), 'grossRealisedPnl')
       .addSelect(sum('ABS(trade.commission)'), 'totalCommission')
       .addSelect(sum('trade.swap'), 'totalSwap')
       .addSelect(net, 'netRealisedPnl')
       .addSelect(`${sum('ABS(trade.commission)')} - ${sum('trade.swap')}`, 'totalExplicitCosts')
-      .addSelect(settledOnly('AVG(CASE WHEN trade.realisedPnl > 0 THEN trade.realisedPnl END)'), 'averageWin')
-      .addSelect(settledOnly('AVG(CASE WHEN trade.realisedPnl < 0 THEN -trade.realisedPnl END)'), 'averageLoss')
+      .addSelect(
+        settledOnly('AVG(CASE WHEN trade.realisedPnl > 0 THEN trade.realisedPnl END)'),
+        'averageWin',
+      )
+      .addSelect(
+        settledOnly('AVG(CASE WHEN trade.realisedPnl < 0 THEN -trade.realisedPnl END)'),
+        'averageLoss',
+      )
       .addSelect(`(${net}) / NULLIF(${count}, 0)`, 'expectancyPerTrade')
-      .addSelect(settledOnly('MAX(CASE WHEN trade.realisedPnl > 0 THEN trade.realisedPnl END)'), 'largestWin')
-      .addSelect(settledOnly('MIN(CASE WHEN trade.realisedPnl < 0 THEN trade.realisedPnl END)'), 'largestLoss')
+      .addSelect(
+        settledOnly('MAX(CASE WHEN trade.realisedPnl > 0 THEN trade.realisedPnl END)'),
+        'largestWin',
+      )
+      .addSelect(
+        settledOnly('MIN(CASE WHEN trade.realisedPnl < 0 THEN trade.realisedPnl END)'),
+        'largestLoss',
+      )
       .addSelect(
         settledOnly('AVG(EXTRACT(EPOCH FROM (trade.closedAt - trade.openedAt)) / 60.0)'),
         'averageHoldMinutes',
