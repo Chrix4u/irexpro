@@ -88,6 +88,19 @@ describe('closed Pepperstone DEMO broker-native settlement proof', () => {
     expect(verify([{ ...deal, ...changes }])).toEqual({ matched: false, reason });
   });
 
+  it.each([6, 16])(
+    'reproduces an unsettled local terminal record preceding the provider close by %i minutes',
+    (minutes) => {
+      // Synthetic chronology, not an assertion about a particular production record.
+      const premature = new Date(deal.closedAt.getTime() - minutes * 60_000);
+      const result = verify([deal], { closedAt: premature });
+      expect(result).toEqual({
+        matched: false,
+        reason: 'PROVIDER_CLOSE_TIME_DELTA_EXCEEDS_WINDOW',
+      });
+    },
+  );
+
   it('will not guess P&L, fee, or broker cost sign from incomplete data', () => {
     for (const partial of [
       { realisedPnl: '' },
