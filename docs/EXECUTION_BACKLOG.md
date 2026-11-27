@@ -244,3 +244,10 @@ Next: finish CI/review of diagnostics and UI, then the read-only statement compa
 - Individual reporting browser checks and prior #850/#852 CI passed; #855/#856 rerun and integrated CI remain pending. Require whole-candidate API build, tests, PostgreSQL integration, browser checks, review and guarded deployment before release.
 - ACC-02/ACC-04 remain open. No historical records have been corrected by this integration. Native broker evidence, close-time provenance, historical deal completeness (#841/#848), and protective-order causality remain outstanding. Do not replay uncertain orders or change LIVE authorization.
 - Next: review integrated CI, address failures, validate authorized read-only broker evidence and release prerequisites. No deployment or runtime mutation from this candidate.
+
+
+### Candidate history completeness follow-up
+
+- Stack the #841 history pagination correction onto the #857/#858 integration candidate for combined CI. Verified the original adapter blobs were identical on main and the #841 base, and both #850 validation changes applied uniquely to the corrected history files without overlap.
+- Official Spotware Open API message reference (https://help.ctrader.com/open-api/messages/) specifies the required account ID and hasMore completeness flag for broad and position-specific deal history. It does not establish the inclusive timestamp boundary behavior of the authenticated DEMO connection. Retain the explicit provider-evidence requirement from #841 and #848.
+- Treat this as an unapproved test candidate; do not merge or deploy the history change until the read-only provider contract check succeeds. #857 can be reviewed independently. Preserve existing execution and risk controls and do not infer historical settlement from incomplete data.

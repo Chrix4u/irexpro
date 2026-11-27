@@ -2469,56 +2469,47 @@ describe('CTraderAdapter', () => {
       };
     }
 
-    it('paginates through hasMore pages and maps closing deals to BrokerClosedTrade', async () => {
-      let call = 0;
+    it('subdivides truncated history without losing unordered or same-timestamp deals', async () => {
+      const from = 1757000000000;
+      const boundary = from + 1000;
+      const to = from + 2000;
+      const deals = [
+        closingDeal(7654321, boundary),
+        closingDeal(7654399, boundary),
+        closingDeal(7654400, boundary + 1),
+        {
+          dealId: 9,
+          orderId: 10,
+          positionId: 99,
+          executionTimestamp: from,
+          tradeSide: 1,
+        },
+      ];
       server.on(CTRADER_PAYLOAD_TYPE.DEAL_LIST_REQ, (payload, envelope) => {
-        call += 1;
-        if (call === 1) {
-          return echo(
-            CTRADER_PAYLOAD_TYPE.DEAL_LIST_RES,
-            {
-              ctidTraderAccountId: payload.ctidTraderAccountId,
-              // A non-closing (opening) deal must be filtered out.
-              deal: [
-                {
-                  dealId: 9,
-                  orderId: 10,
-                  positionId: 99,
-                  volume: 1_000_000,
-                  filledVolume: 1_000_000,
-                  symbolId: 101,
-                  executionTimestamp: 1757000000000,
-                  tradeSide: 1,
-                  dealStatus: 2,
-                },
-                closingDeal(7654321, 1757000100000),
-              ],
-              hasMore: true,
-            },
-            envelope,
-          );
-        }
+        const matching = deals
+          .filter(
+            (d) =>
+              Number(d.executionTimestamp) >= Number(payload.fromTimestamp) &&
+              Number(d.executionTimestamp) <= Number(payload.toTimestamp),
+          )
+          .reverse();
+        const truncated = payload.fromTimestamp === from && payload.toTimestamp === to;
         return echo(
           CTRADER_PAYLOAD_TYPE.DEAL_LIST_RES,
           {
             ctidTraderAccountId: payload.ctidTraderAccountId,
-            deal: [closingDeal(7654399, 1757000200000)],
-            hasMore: false,
+            deal: truncated ? [deals[2]] : matching,
+            hasMore: truncated,
           },
           envelope,
         );
       });
       await connectDemo();
 
-      const trades = await adapter.getClosedTrades(
-        new Date(1757000000000),
-        new Date(1757000300000),
-      );
+      const trades = await adapter.getClosedTrades(new Date(from), new Date(to));
 
-      expect(call).toBe(2);
-      expect(trades).toHaveLength(2);
+      expect(trades.map((t) => t.externalOrderId)).toEqual(['7654321', '7654399', '7654400']);
       expect(trades[0]).toMatchObject({
-        externalOrderId: '7654321',
         instrument: 'EUR/USD',
         direction: 'SELL',
         lotSize: '0.1',
@@ -2527,16 +2518,61 @@ describe('CTraderAdapter', () => {
         realisedPnl: '123.45',
         commission: '2.50',
         swap: '-1.00',
-        closedAt: new Date(1757000100000),
-        closeReason: 'UNKNOWN', // honest: cTrader deals carry no close reason
+        closedAt: new Date(boundary),
+        closeReason: 'UNKNOWN',
       });
-      expect(trades[1].externalOrderId).toBe('7654399');
-      // The second page advanced fromTimestamp past the last first-page deal.
       const pages = server.requests.filter(
         (r) => r.payloadType === CTRADER_PAYLOAD_TYPE.DEAL_LIST_REQ,
       );
-      expect(pages[1].payload).toMatchObject({ fromTimestamp: 1757000100001 });
+      expect(pages).toHaveLength(3);
+      expect(pages[1].payload).toMatchObject({ fromTimestamp: from, toTimestamp: boundary });
+      expect(pages[2].payload).toMatchObject({ fromTimestamp: boundary + 1, toTimestamp: to });
     });
+
+    it('refuses truncated history when the window cannot be subdivided', async () => {
+      const timestamp = 1757000000000;
+      server.on(CTRADER_PAYLOAD_TYPE.DEAL_LIST_REQ, (payload, envelope) =>
+        echo(
+          CTRADER_PAYLOAD_TYPE.DEAL_LIST_RES,
+          {
+            ctidTraderAccountId: payload.ctidTraderAccountId,
+            deal: [closingDeal(7654321, timestamp)],
+            hasMore: true,
+          },
+          envelope,
+        ),
+      );
+      await connectDemo();
+      await expect(
+        adapter.getClosedTrades(new Date(timestamp), new Date(timestamp)),
+      ).rejects.toMatchObject({ code: BrokerErrorCode.BROKER_SERVER_ERROR });
+    });
+
+    it.each(['duplicate', 'wrong account', 'out of range', 'missing completeness flag'])(
+      'refuses incomplete or inconsistent history: %s',
+      async (kind) => {
+        const timestamp = 1757000000000;
+        const deal = closingDeal(7654321, timestamp);
+        server.on(CTRADER_PAYLOAD_TYPE.DEAL_LIST_REQ, (payload, envelope) =>
+          echo(
+            CTRADER_PAYLOAD_TYPE.DEAL_LIST_RES,
+            {
+              ctidTraderAccountId: kind === 'wrong account' ? 999 : payload.ctidTraderAccountId,
+              deal:
+                kind === 'duplicate'
+                  ? [deal, deal]
+                  : [kind === 'out of range' ? closingDeal(7654321, timestamp + 1) : deal],
+              ...(kind === 'missing completeness flag' ? {} : { hasMore: false }),
+            },
+            envelope,
+          ),
+        );
+        await connectDemo();
+        await expect(
+          adapter.getClosedTrades(new Date(timestamp), new Date(timestamp)),
+        ).rejects.toMatchObject({ code: BrokerErrorCode.BROKER_SERVER_ERROR });
+      },
+    );
 
     it('stops at the first page when hasMore is false', async () => {
       await connectDemo();

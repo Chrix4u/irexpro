@@ -64,9 +64,9 @@
  *   position is unprotected — the ExecutionService marks the trade
  *   RECONCILIATION_PENDING and the reconciliation job re-syncs from the
  *   position state (never a dishonest success).
- * - Deal-list pagination chunk semantics are not officially documented
- *   (worklog 47-B1 flag) — pagination advances fromTimestamp past the last
- *   returned deal (ascending assumption) and is hard-capped at 100 pages.
+ * - Deal-list history subdivides truncated millisecond windows without
+ *   assuming provider ordering; incomplete evidence fails closed within a
+ *   bounded request budget.
  * - cTrader deals carry no close reason and no position-open timestamp —
  *   closeReason is reported honestly as UNKNOWN.
  * - ProtoOAReconcileRes's `order` field is the provider's PENDING-order
@@ -157,7 +157,7 @@ import {
   wirePriceToDecimalString,
 } from './ctrader-message-types';
 
-/** Cap on deal-list pagination (infinite-loop guard, documented). */
+/** Cap on deal-list requests (including truncated windows). */
 const MAX_DEAL_LIST_PAGES = 100;
 /** Page size for deal-list requests (within the 5 req/s historical budget). */
 const DEAL_LIST_MAX_ROWS = 200;
@@ -1507,39 +1507,84 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
     try {
       await this.fetchSymbolsList(session);
       const ctid = parseCtraderId(session.accountId, 'ctidTraderAccountId');
-      const trades: BrokerClosedTrade[] = [];
-      let pageFrom = from.getTime();
+      const fromMs = from.getTime();
       const toMs = to.getTime();
+      const incomplete = () =>
+        new BrokerAdapterError(
+          BrokerErrorCode.BROKER_SERVER_ERROR,
+          'cTrader deal history completeness could not be established.',
+        );
+      if (
+        !Number.isSafeInteger(fromMs) ||
+        !Number.isSafeInteger(toMs) ||
+        fromMs < 0 ||
+        fromMs > toMs
+      ) {
+        throw incomplete();
+      }
 
-      for (let page = 0; page < MAX_DEAL_LIST_PAGES; page++) {
+      // A truncated response has no guaranteed ordering. Subdivide the
+      // requested millisecond range instead of advancing past a returned deal.
+      // Never use a truncated page as settlement evidence.
+      const windows: Array<[number, number]> = [[fromMs, toMs]];
+      const completeDeals = new Map<number, CtraderDeal>();
+      let requests = 0;
+      while (windows.length > 0) {
+        if (++requests > MAX_DEAL_LIST_PAGES) throw incomplete();
+        const [lower, upper] = windows.pop()!;
         const response = await this.client.request(
           session.env,
           CTRADER_PAYLOAD_TYPE.DEAL_LIST_REQ,
           {
             ctidTraderAccountId: ctid,
-            fromTimestamp: pageFrom,
-            toTimestamp: toMs,
+            fromTimestamp: lower,
+            toTimestamp: upper,
             maxRows: DEAL_LIST_MAX_ROWS,
           },
         );
         const payload = expectCtraderPayload<{
+          ctidTraderAccountId: number;
           deal?: CtraderDeal[];
           hasMore?: boolean;
         }>(response, CTRADER_PAYLOAD_TYPE.DEAL_LIST_RES);
-        const deals = Array.isArray(payload.deal) ? payload.deal : [];
-        const closingDeals = deals.filter((deal) => deal?.closePositionDetail !== undefined);
+        if (
+          payload.ctidTraderAccountId !== ctid ||
+          typeof payload.hasMore !== 'boolean' ||
+          (payload.deal !== undefined && !Array.isArray(payload.deal))
+        ) {
+          throw incomplete();
+        }
+        const deals = payload.deal ?? [];
+        if (payload.hasMore) {
+          if (lower === upper) throw incomplete();
+          const middle = lower + Math.floor((upper - lower) / 2);
+          windows.push([middle + 1, upper], [lower, middle]);
+          continue;
+        }
+        for (const deal of deals) {
+          if (
+            !deal ||
+            !Number.isSafeInteger(deal.dealId) ||
+            deal.dealId <= 0 ||
+            !Number.isSafeInteger(deal.executionTimestamp) ||
+            deal.executionTimestamp < lower ||
+            deal.executionTimestamp > upper ||
+            completeDeals.has(deal.dealId)
+          ) {
+            throw incomplete();
+          }
+          completeDeals.set(deal.dealId, deal);
+        }
+      }
 
-        for (const deal of closingDeals) {
+      const trades: BrokerClosedTrade[] = [];
+      const ordered = [...completeDeals.values()].sort(
+        (a, b) => a.executionTimestamp - b.executionTimestamp || a.dealId - b.dealId,
+      );
+      for (const deal of ordered) {
+        if (deal.closePositionDetail !== undefined) {
           trades.push(await this.mapClosedDeal(session, deal));
         }
-
-        if (payload.hasMore !== true || deals.length === 0) {
-          break;
-        }
-        // Advance past the last returned deal (ascending-order assumption;
-        // chunk semantics are not officially documented — hard page cap above).
-        const lastTimestamp = deals[deals.length - 1].executionTimestamp;
-        pageFrom = lastTimestamp + 1;
       }
       return trades;
     } catch (err) {
