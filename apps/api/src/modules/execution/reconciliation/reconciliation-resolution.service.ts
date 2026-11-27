@@ -139,9 +139,7 @@ export class ReconciliationResolutionService {
       const storedSwap = ExactDecimal.tryParse(trade.swap);
       const providerSwap = p.swap == null ? null : ExactDecimal.tryParse(p.swap);
       if (!storedSwap || !providerSwap || !storedSwap.eq(providerSwap)) {
-        this.logger.warn(
-          `DEMO settlement deferred for trade ${trade.id}: EXISTING_SWAP_CONFLICT`,
-        );
+        this.logger.warn(`DEMO settlement deferred for trade ${trade.id}: EXISTING_SWAP_CONFLICT`);
         return false;
       }
     }

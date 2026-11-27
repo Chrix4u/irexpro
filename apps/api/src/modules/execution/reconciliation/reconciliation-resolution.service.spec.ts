@@ -1235,9 +1235,9 @@ describe('ReconciliationResolutionService', () => {
     });
     it('preserves an existing exactly matching swap while recovering missing economics', async () => {
       const trade = baseTrade({ ...missing(), swap: '-0.12500000' });
-      expect(await service.backfillClosedDemoSettlement(
-        request(trade, [{ ...broker(), swap: '-0.125' }]),
-      )).toBe(true);
+      expect(
+        await service.backfillClosedDemoSettlement(request(trade, [{ ...broker(), swap: '-0.125' }])),
+      ).toBe(true);
       expect(tradeRepo.update).toHaveBeenCalledWith(
         expect.objectContaining({ swap: '-0.12500000' }),
         expect.not.objectContaining({ swap: expect.anything() }),
@@ -1247,18 +1247,18 @@ describe('ReconciliationResolutionService', () => {
     it.each(['-0.01', 'invalid'])(
       'defers recovery when stored swap %s contradicts broker evidence',
       async (swap) => {
-        expect(await service.backfillClosedDemoSettlement(
-          request(baseTrade({ ...missing(), swap })),
-        )).toBe(false);
+        expect(
+          await service.backfillClosedDemoSettlement(request(baseTrade({ ...missing(), swap }))),
+        ).toBe(false);
         expect(tradeRepo.update).not.toHaveBeenCalled();
         expect(auditService.log).not.toHaveBeenCalled();
       },
     );
     it('does not book settlement if the swap compare-and-set loses a race', async () => {
       tradeRepo.update.mockResolvedValueOnce({ affected: 0 });
-      expect(await service.backfillClosedDemoSettlement(
-        request(baseTrade({ ...missing(), swap: '0.00000000' })),
-      )).toBe(false);
+      expect(
+        await service.backfillClosedDemoSettlement(request(baseTrade({ ...missing(), swap: '0.00000000' }))),
+      ).toBe(false);
       expect(tradeRepo.update).toHaveBeenCalledWith(
         expect.objectContaining({ swap: '0.00000000' }),
         expect.anything(),
