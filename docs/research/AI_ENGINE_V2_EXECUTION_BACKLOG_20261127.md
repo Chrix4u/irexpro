@@ -105,8 +105,27 @@ production runtime.
   3→20 samples and PF 0.75→2.0 across the nine gates; the composition veto
   covers 2 of G1's ten failure reasons (corpus RL-D07); the advisory
   overlay multiplies risk to a 0.2 floor and can never veto.
-- [ ] **P1-4** Calibration-service consolidation spec (A4/B4) including the
-  pre-outcome prediction registration format (V2-7 scoreboard).
+- [x] **P1-4** Calibration-service consolidation spec (A4/B4) including the
+  pre-outcome prediction registration format (V2-7 scoreboard). Delivered →
+  `AI_ENGINE_V2_P1_4_CALIBRATION_CONSOLIDATION_SPEC_20261127.md` +
+  executable mirror
+  `apps/api/scripts/research/v2-calibration-contract.cjs` (+ test, CI
+  step). Acceptance: six layers + two auxiliaries and five families pinned
+  with path-verified constants (13 anchors re-proven on every run); frozen
+  corpus `CL-D01..CL-D12` (10 divergence records + 2 controls, 7 disposition
+  conflicts, 2 within-layer splits, 12 distinct patterns) computed by
+  faithful mirrors and reconciled on every run; unified contract CAL-1 (one
+  evidence ladder, one sample ladder COLD/SCOUT/AUTHORITATIVE/MATURE, one
+  Bayesian blend prior 8, one maturity vocabulary, one authority gradient);
+  CAL-2 append-only pre-outcome scoreboard with retrodiction and duplicate
+  refusal, P4 excluded; typed refusals
+  (`CALIBRATION_INPUT_REQUIRED`, `CALIBRATION_UNSUPPORTED_SURFACE`,
+  `CALIBRATION_INPUT_OUT_OF_RANGE`, `CALIBRATION_CONTRACT_TAMPERED`,
+  `CALIBRATION_PATH_DRIFT`). Integration note (2026-11-28): recovered from
+  `research/ai-engine-v2-p1-4-calibration-20261127` @ `f97bb7e9` (stacked on
+  P1-3 @ `cff28862` and the P1-0.5 extension @ `31c4e862`), cherry-picked
+  post main-sync `ce447f47` with CI/backlog conflict resolution; contract
+  content byte-preserved.
 - [x] **P1-5** Exit-specification consolidation spec (A7/G1): parameterized
   retention/force-close policy; document the four current divergent
   implementations as the comparison baseline; no constants changed.

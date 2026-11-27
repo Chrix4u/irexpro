@@ -256,6 +256,11 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify V2 calibration contract (P1-4) corpus, CAL-1 refusals and scoreboard rules
+        run: node --test apps/api/scripts/research/v2-calibration-contract.test.cjs
+        env:
+          NODE_ENV: test
+
       - name: Verify V2 exit-intelligence contract (P1-5) six-engine EI-1 unification
         run: node --test apps/api/scripts/research/v2-exit-intelligence-contract.test.cjs
         env:
