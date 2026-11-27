@@ -1187,9 +1187,13 @@ describe('CTraderAdapter', () => {
       const subscriptions = () =>
         server.requests
           .filter((request) => request.payloadType === CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ)
-          .map((request) => request.payload.symbolId);
+          .map((request) => request.payload?.symbolId);
       const initial = await adapter.getOpenPositionDisplay();
-      expect(initial.map((position) => position.unrealisedPnl)).toEqual(['123.45', '-45.67', '0.00']);
+      expect(initial.map((position) => position.unrealisedPnl)).toEqual([
+        '123.45',
+        '-45.67',
+        '0.00',
+      ]);
       // Wait for the display-started flight only; never prime a second symbol here.
       const firstFlight = adapter['spotQuoteFlights'].get(
         `${session.env}:${session.accountId}:101`,
