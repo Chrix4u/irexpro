@@ -42,6 +42,13 @@ successors) which is explicitly out of V2 scope.
   `V2_EXECUTION_BACKLOG_EXTENSION.md`), architecture proposal, and DEMO
   evaluation design. It duplicates scope with #846 by intent (independent
   replication), not by accident.
+- **C-3 drift re-verification (2026-11-27, later the same day, before the
+  P1-3 delivery):** `main` re-checked via `git ls-remote` — still
+  `2f59fc74`, no new advance since the snapshot above. Verdict: **zero
+  drift**; the P1-3 spec cites line anchors from the branch tree
+  (`31c4e862` + the P1-3 delta) whose gate-file constants and
+  scheduler/collector seam anchors are content-verified on every CI run by
+  `verifyReliabilityGatePaths` / `verifyOrchestrationSeams`.
 
 ## 1. New backlog items
 
@@ -63,11 +70,19 @@ successors) which is explicitly out of V2 scope.
 
 ### P1-3..P1-6 (carried from the base backlog, inputs now extended)
 
-- [ ] **P1-3** Reliability-layer consolidation spec (A3). Inputs: map v1 §3
-  (floor ladder 3→20 samples, PF 1.0→2.0) **plus** phase-2 §13 finding that
-  the reliability gates are invoked from one ~3,693-line `runOnce` method —
-  the consolidation spec must define extraction seams, not only shared
-  floors. Not started.
+- [x] **P1-3** Reliability-layer consolidation spec (A3). Inputs: map v1
+  §3 (floor ladder 3→20 samples, PF 1.0→2.0) **plus** phase-2 §13 finding
+  that the reliability gates are invoked from one ~3,693-line `runOnce`
+  method — the consolidation spec must define extraction seams, not only
+  shared floors. Delivered (2026-11-27, stacked on this branch) →
+  `AI_ENGINE_V2_P1_3_RELIABILITY_CONSOLIDATION_SPEC_20261127.md` +
+  `apps/api/scripts/research/v2-reliability-gate-contract.cjs` (+ test, CI
+  step): nine-gate inventory, RL-1 ladder (COLD < 3 / SCOUT 3-5 / MEANINGFUL
+  ≥ 6 / cap 20) with the mature handoff as a ladder rule, pre-registered
+  floor slots (strictest observed V1 value per concept), verdict vocabulary
+  + authority gradient, extraction seams SEAM-1/2/3 with CI-verified
+  anchors, frozen corpus `RL-D01..RL-D12` (10 divergence + 2 controls;
+  21-test suite, typed refusals, constant-anchor drift detection).
 - [ ] **P1-4** Calibration-service consolidation spec (A4/B4) with the
   pre-outcome prediction registration format (V2-7 scoreboard). Inputs:
   map v1 §4 + §6 unchanged. Not started.
