@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, MoreThan, Repository } from 'typeorm';
+import { In, IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
 import { BrokerAccount } from '../../broker/entities/broker-account.entity';
 import { BrokerService } from '../../broker/broker.service';
@@ -458,15 +458,28 @@ export class StateReconciliationService {
       if (shouldInspectLateEconomics) {
         this.closedEconomicsLookupAtByConnection.set(connection.id, lateEconomicsNow);
         closedUnsettledTrades = await this.tradeRepo.find({
-          where: {
-            brokerConnectionId: connection.id,
-            userId: connection.userId,
-            status: TradeStatus.CLOSED,
-            realisedPnl: IsNull(),
-            commission: IsNull(),
-            exitPrice: IsNull(),
-            closedAt: MoreThan(new Date(lateEconomicsNow - 7 * 86400_000)),
-          },
+          where: [
+            {
+              brokerConnectionId: connection.id,
+              userId: connection.userId,
+              status: TradeStatus.CLOSED,
+              realisedPnl: IsNull(),
+              commission: IsNull(),
+              exitPrice: IsNull(),
+              closedAt: MoreThan(new Date(lateEconomicsNow - 7 * 86400_000)),
+            },
+            {
+              brokerConnectionId: connection.id,
+              userId: connection.userId,
+              status: TradeStatus.CLOSED,
+              externalPositionId: Not(IsNull()),
+              realisedPnl: Not(IsNull()),
+              commission: Not(IsNull()),
+              exitPrice: Not(IsNull()),
+              swap: IsNull(),
+              closedAt: MoreThan(new Date(lateEconomicsNow - 7 * 86400_000)),
+            },
+          ],
           order: { closedAt: 'DESC' },
           take: 10,
         });
@@ -478,7 +491,8 @@ export class StateReconciliationService {
 
       // A provider close without economics can remain CLOSED safely; if a
       // complete uniquely matched full closing deal later becomes visible,
-      // fill ONLY the three NULL economics via a guarded CAS. Never create a
+      // fill only missing economics (or a missing swap with matching recorded
+      // economics) via a guarded CAS. Never create a
       // synthetic profit/commission or reorder an already closed trade.
       for (const settled of closedUnsettledTrades) {
         try {

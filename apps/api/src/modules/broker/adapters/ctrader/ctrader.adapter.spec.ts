@@ -1154,6 +1154,72 @@ describe('CTraderAdapter', () => {
       expect(findRequest(server, CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)).toBeUndefined();
     });
 
+    it('refreshes distinct cold symbols across display reads without duplicating same-symbol subscriptions', async () => {
+      scriptReconcile(
+        [
+          SAMPLE_POSITION,
+          {
+            ...SAMPLE_POSITION,
+            positionId: 7654322,
+            tradeData: { ...SAMPLE_POSITION.tradeData, symbolId: 102 },
+          },
+          { ...SAMPLE_POSITION, positionId: 7654323 },
+        ],
+        [],
+      );
+      server.on(CTRADER_PAYLOAD_TYPE.GET_POSITION_UNREALIZED_PNL_REQ, (payload, envelope) =>
+        echo(
+          CTRADER_PAYLOAD_TYPE.GET_POSITION_UNREALIZED_PNL_RES,
+          {
+            ctidTraderAccountId: payload.ctidTraderAccountId,
+            positionUnrealizedPnL: [
+              { positionId: 7654321, grossUnrealizedPnL: 15000, netUnrealizedPnL: 12345 },
+              { positionId: 7654322, grossUnrealizedPnL: -4000, netUnrealizedPnL: -4567 },
+              { positionId: 7654323, grossUnrealizedPnL: 200, netUnrealizedPnL: 0 },
+            ],
+            moneyDigits: 2,
+          },
+          envelope,
+        ),
+      );
+      await connectDemo();
+      const session = adapter['requireCurrentSession']();
+      const subscriptions = () =>
+        server.requests
+          .filter((request) => request.payloadType === CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ)
+          .map((request) => request.payload?.symbolId);
+      const initial = await adapter.getOpenPositionDisplay();
+      expect(initial.map((position) => position.unrealisedPnl)).toEqual([
+        '123.45',
+        '-45.67',
+        '0.00',
+      ]);
+      // Wait for the display-started flight only; never prime a second symbol here.
+      const firstFlight = adapter['spotQuoteFlights'].get(
+        `${session.env}:${session.accountId}:101`,
+      );
+      if (firstFlight) await firstFlight;
+      expect(subscriptions()).toEqual([[101]]);
+      const second = await adapter.getOpenPositionDisplay();
+      expect(second[0].currentPrice).toBe('1.08675');
+      expect(second[2].currentPrice).toBe('1.08675');
+      expect(second[1].currentPrice).toBeNull();
+      const secondFlight = adapter['spotQuoteFlights'].get(
+        `${session.env}:${session.accountId}:102`,
+      );
+      if (secondFlight) await secondFlight;
+      expect(subscriptions()).toEqual([[101], [102]]);
+      const final = await adapter.getOpenPositionDisplay();
+      expect(final.map((position) => position.currentPrice)).toEqual([
+        '1.08675',
+        '1.08675',
+        '1.08675',
+      ]);
+      expect(final.map((position) => position.unrealisedPnl)).toEqual(['123.45', '-45.67', '0.00']);
+      expect(subscriptions()).toEqual([[101], [102]]);
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)).toBeUndefined();
+    });
+
     it.each([
       { entries: [], expected: null },
       {

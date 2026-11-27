@@ -112,13 +112,16 @@ export class ReconciliationResolutionService {
     observedAt: Date;
   }): Promise<boolean> {
     const { trade } = input;
-    if (
-      trade.status !== TradeStatus.CLOSED ||
-      trade.realisedPnl !== null ||
-      trade.commission !== null ||
-      trade.exitPrice !== null
-    )
-      return false;
+    const allCoreMissing =
+      trade.realisedPnl === null && trade.commission === null && trade.exitPrice === null;
+    const swapOnly =
+      trade.swap === null &&
+      trade.externalPositionId !== null &&
+      trade.externalPositionId !== '' &&
+      trade.realisedPnl !== null &&
+      trade.commission !== null &&
+      trade.exitPrice !== null;
+    if (trade.status !== TradeStatus.CLOSED || (!allCoreMissing && !swapOnly)) return false;
     const proof = proveUniqueCtraderDemoSettlement(
       trade,
       input.providerDeals,
@@ -143,13 +146,35 @@ export class ReconciliationResolutionService {
         return false;
       }
     }
-    const patch: Partial<Trade> = {
-      exitPrice: p.closePrice,
-      realisedPnl: p.realisedPnl,
-      commission: p.commission,
-      ...(trade.swap === null ? { swap: p.swap } : {}),
-    };
+    // A swap-only repair must agree with every already recorded core value.
+    // Do not change existing economics or path telemetry.
+    if (swapOnly) {
+      const pairs = [
+        [trade.exitPrice, p.closePrice],
+        [trade.realisedPnl, p.realisedPnl],
+        [trade.commission, p.commission],
+      ];
+      if (
+        pairs.some(([stored, provider]) => {
+          const a = stored == null ? null : ExactDecimal.tryParse(stored);
+          const b = provider == null ? null : ExactDecimal.tryParse(provider);
+          return !a || !b || !a.eq(b);
+        })
+      ) {
+        this.logger.warn(`DEMO settlement deferred for trade ${trade.id}: EXISTING_CORE_CONFLICT`);
+        return false;
+      }
+    }
+    const patch: Partial<Trade> = swapOnly
+      ? { swap: p.swap }
+      : {
+          exitPrice: p.closePrice,
+          realisedPnl: p.realisedPnl,
+          commission: p.commission,
+          ...(trade.swap === null ? { swap: p.swap } : {}),
+        };
     if (
+      !swapOnly &&
       (trade.pathObservationCount ?? 0) > 0 &&
       trade.maxFavorablePnl != null &&
       trade.maxAdversePnl != null &&
@@ -176,9 +201,20 @@ export class ReconciliationResolutionService {
         userId: trade.userId,
         brokerConnectionId: trade.brokerConnectionId,
         status: TradeStatus.CLOSED,
-        realisedPnl: IsNull(),
-        commission: IsNull(),
-        exitPrice: IsNull(),
+        ...(swapOnly
+          ? {
+              // Require the same persisted native position and economics.
+              externalPositionId: trade.externalPositionId!,
+              realisedPnl: trade.realisedPnl!,
+              commission: trade.commission!,
+              exitPrice: trade.exitPrice!,
+              openedAt: trade.openedAt!,
+              closedAt: trade.closedAt!,
+              fillPrice: trade.fillPrice!,
+              lotSize: trade.lotSize,
+              instrument: trade.instrument,
+            }
+          : { realisedPnl: IsNull(), commission: IsNull(), exitPrice: IsNull() }),
         // Also fence concurrent writes to swap, including NULL -> known.
         swap: trade.swap === null ? IsNull() : trade.swap,
       },
@@ -191,7 +227,9 @@ export class ReconciliationResolutionService {
       resourceType: 'Trade',
       resourceId: trade.id,
       metadata: {
-        artifact: 'unique-ctrader-demo-closed-economics-recovery-v1',
+        artifact: swapOnly
+          ? 'unique-ctrader-demo-swap-only-recovery-v1'
+          : 'unique-ctrader-demo-closed-economics-recovery-v1',
         evidence: 'ONE_FULL_CLOSING_DEAL_EXACT_POSITION_ENTRY_VOLUME_AND_TIME',
         brokerId: input.brokerId,
         providerPositionId: p.externalOrderId,
