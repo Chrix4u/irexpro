@@ -285,57 +285,57 @@ export class ExecutionReadService {
     // for monetary totals and outcome metrics. Missing fees are not zero.
     // Completeness of stored fields is not independent broker provenance.
     const complete = [
-      'trade.realisedPnl IS NOT NULL',
-      'trade.commission IS NOT NULL',
-      'trade.swap IS NOT NULL',
-      'trade.exitPrice IS NOT NULL',
-      'trade.accountCurrency IS NOT NULL',
-      "BTRIM(trade.accountCurrency) <> ''",
+      '"trade"."realised_pnl" IS NOT NULL',
+      '"trade"."commission" IS NOT NULL',
+      '"trade"."swap" IS NOT NULL',
+      '"trade"."exit_price" IS NOT NULL',
+      '"trade"."account_currency" IS NOT NULL',
+      `BTRIM("trade"."account_currency") <> ''`,
     ].join(' AND ');
     const settledOnly = (aggregate: string) => `${aggregate} FILTER (WHERE ${complete})`;
     const sum = (expression: string) => `COALESCE(${settledOnly(`SUM(${expression})`)}, 0)`;
     const count = settledOnly('COUNT(*)');
-    const net = `${sum('trade.realisedPnl')} - ${sum('ABS(trade.commission)')} + ${sum('trade.swap')}`;
+    const net = `${sum('"trade"."realised_pnl"')} - ${sum('ABS("trade"."commission")')} + ${sum('"trade"."swap"')}`;
     const summaryQuery = baseQuery.clone();
     const rawRows = (await summaryQuery
-      .select('trade.accountCurrency', 'accountCurrency')
+      .select('"trade"."account_currency"', 'accountCurrency')
       .addSelect('COUNT(*)', 'totalTrades')
       .addSelect(count, 'pnlTradeCount')
-      .addSelect(settledOnly('COUNT(CASE WHEN trade.realisedPnl > 0 THEN 1 END)'), 'wins')
-      .addSelect(settledOnly('COUNT(CASE WHEN trade.realisedPnl < 0 THEN 1 END)'), 'losses')
-      .addSelect(settledOnly('COUNT(CASE WHEN trade.realisedPnl = 0 THEN 1 END)'), 'flats')
+      .addSelect(settledOnly('COUNT(CASE WHEN "trade"."realised_pnl" > 0 THEN 1 END)'), 'wins')
+      .addSelect(settledOnly('COUNT(CASE WHEN "trade"."realised_pnl" < 0 THEN 1 END)'), 'losses')
+      .addSelect(settledOnly('COUNT(CASE WHEN "trade"."realised_pnl" = 0 THEN 1 END)'), 'flats')
       .addSelect(
-        sum('CASE WHEN trade.realisedPnl > 0 THEN trade.realisedPnl ELSE 0 END'),
+        sum('CASE WHEN "trade"."realised_pnl" > 0 THEN "trade"."realised_pnl" ELSE 0 END'),
         'grossProfit',
       )
       .addSelect(
-        sum('CASE WHEN trade.realisedPnl < 0 THEN -trade.realisedPnl ELSE 0 END'),
+        sum('CASE WHEN "trade"."realised_pnl" < 0 THEN -"trade"."realised_pnl" ELSE 0 END'),
         'grossLoss',
       )
-      .addSelect(sum('trade.realisedPnl'), 'grossRealisedPnl')
-      .addSelect(sum('ABS(trade.commission)'), 'totalCommission')
-      .addSelect(sum('trade.swap'), 'totalSwap')
+      .addSelect(sum('"trade"."realised_pnl"'), 'grossRealisedPnl')
+      .addSelect(sum('ABS("trade"."commission")'), 'totalCommission')
+      .addSelect(sum('"trade"."swap"'), 'totalSwap')
       .addSelect(net, 'netRealisedPnl')
-      .addSelect(`${sum('ABS(trade.commission)')} - ${sum('trade.swap')}`, 'totalExplicitCosts')
+      .addSelect(`${sum('ABS("trade"."commission")')} - ${sum('"trade"."swap"')}`, 'totalExplicitCosts')
       .addSelect(
-        settledOnly('AVG(CASE WHEN trade.realisedPnl > 0 THEN trade.realisedPnl END)'),
+        settledOnly('AVG(CASE WHEN "trade"."realised_pnl" > 0 THEN "trade"."realised_pnl" END)'),
         'averageWin',
       )
       .addSelect(
-        settledOnly('AVG(CASE WHEN trade.realisedPnl < 0 THEN -trade.realisedPnl END)'),
+        settledOnly('AVG(CASE WHEN "trade"."realised_pnl" < 0 THEN -"trade"."realised_pnl" END)'),
         'averageLoss',
       )
       .addSelect(`(${net}) / NULLIF(${count}, 0)`, 'expectancyPerTrade')
       .addSelect(
-        settledOnly('MAX(CASE WHEN trade.realisedPnl > 0 THEN trade.realisedPnl END)'),
+        settledOnly('MAX(CASE WHEN "trade"."realised_pnl" > 0 THEN "trade"."realised_pnl" END)'),
         'largestWin',
       )
       .addSelect(
-        settledOnly('MIN(CASE WHEN trade.realisedPnl < 0 THEN trade.realisedPnl END)'),
+        settledOnly('MIN(CASE WHEN "trade"."realised_pnl" < 0 THEN "trade"."realised_pnl" END)'),
         'largestLoss',
       )
       .addSelect(
-        settledOnly('AVG(EXTRACT(EPOCH FROM (trade.closedAt - trade.openedAt)) / 60.0)'),
+        settledOnly('AVG(EXTRACT(EPOCH FROM ("trade"."closed_at" - "trade"."opened_at")) / 60.0)'),
         'averageHoldMinutes',
       )
       .groupBy('trade.accountCurrency')
@@ -351,7 +351,8 @@ export class ExecutionReadService {
     const flats = rawRows.reduce((sum, row) => sum + (Number(row.flats) || 0), 0);
     const outcomeCount = wins + losses + flats;
     const singleCurrency = currencyBreakdown.length === 1 ? currencyBreakdown[0] : null;
-    const knownCurrency = singleCurrency && singleCurrency.pnlTradeCount > 0 ? singleCurrency : null;
+    const knownCurrency =
+      singleCurrency && singleCurrency.pnlTradeCount > 0 ? singleCurrency : null;
 
     return {
       trades,
