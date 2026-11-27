@@ -624,6 +624,9 @@ export class ExecutionService {
           patch: {
             status: TradeStatus.OPEN,
             externalOrderId: dispatch.providerOrderId,
+            ...(dispatch.order.providerPositionId
+              ? { externalPositionId: dispatch.order.providerPositionId }
+              : {}),
             fillPrice: dispatch.avgFillPrice,
             openedAt: new Date(),
           },

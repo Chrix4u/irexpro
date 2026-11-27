@@ -406,12 +406,13 @@ describe('StateReconciliationService', () => {
   });
 
   it.each([
-    { distinct: false, reject: false },
-    { distinct: true, reject: false },
-    { distinct: true, reject: true },
+    { distinct: false, reject: false, unsettled: false },
+    { distinct: true, reject: false, unsettled: false },
+    { distinct: true, reject: true, unsettled: false },
+    { distinct: true, reject: false, unsettled: true },
   ])(
-    'Pepperstone DEMO closed-order recovery records proof outcome ($distinct, $reject)',
-    async ({ distinct, reject }) => {
+    'Pepperstone DEMO closed-order recovery records proof outcome ($distinct, $reject, $unsettled)',
+    async ({ distinct, reject, unsettled }) => {
       const previous = process.env.VPS_FOREX_SCANNER_USER_ID;
       process.env.VPS_FOREX_SCANNER_USER_ID = 'user-1';
       try {
@@ -430,8 +431,9 @@ describe('StateReconciliationService', () => {
           externalOrderId: '8422910',
           fillPrice: '1.43798',
           lotSize: '2.8000',
-          exitPrice: '1.43767000',
-          realisedPnl: '60.38000000',
+          exitPrice: unsettled ? null : '1.43767000',
+          realisedPnl: unsettled ? null : '60.38000000',
+          commission: unsettled ? null : '-8.40',
         };
         const orphan = {
           ...pendingOrder(),
@@ -458,7 +460,8 @@ describe('StateReconciliationService', () => {
           takeProfit: '0',
           realisedPnl: '60.38',
           openedAt: closed,
-          closedAt: closed,
+          // A later broker close can prove settlement without proving attribution.
+          closedAt: unsettled ? new Date(closed.getTime() + 60_000) : closed,
           commission: '-8.40',
           swap: '0',
           closeReason: 'UNKNOWN',
@@ -479,6 +482,15 @@ describe('StateReconciliationService', () => {
         };
         orderRepo.find.mockResolvedValueOnce([orphan]).mockResolvedValue(distinct ? [linked] : []);
         tradeRepo.findOne.mockResolvedValue(terminal);
+        if (unsettled) {
+          tradeRepo.findOne.mockResolvedValueOnce(terminal).mockResolvedValueOnce({
+            ...terminal,
+            exitPrice: deal.closePrice,
+            realisedPnl: deal.realisedPnl,
+            commission: deal.commission,
+            swap: deal.swap,
+          });
+        }
         adapter.getClosedTrades.mockResolvedValue(reject ? [] : [deal]);
         orderService.applyFill.mockResolvedValue({ ...orphan, status: OrderStatus.FILLED });
         await service.runForConnection({
@@ -502,14 +514,31 @@ describe('StateReconciliationService', () => {
               demoCloseRecovery: {
                 recent: {
                   selected: 1,
-                  outcomes: reject ? { PROVIDER_DEAL_ABSENT: 1 } : { FILLED_WITH_PROOF: 1 },
+                  outcomes: reject
+                    ? { PROVIDER_DEAL_ABSENT: 1 }
+                    : unsettled
+                      ? { EXACT_BROKER_CLOSE_DEAL_ECONOMICS_MISMATCH: 1 }
+                      : { FILLED_WITH_PROOF: 1 },
                 },
                 aged: { selected: 0, outcomes: {} },
               },
             }),
           }),
         );
-        if (reject) {
+        if (unsettled) {
+          expect(resolution.backfillClosedDemoSettlement).toHaveBeenCalledWith(
+            expect.objectContaining({
+              trade: expect.objectContaining({
+                externalPositionId: '9422910',
+                realisedPnl: null,
+                exitPrice: null,
+                closedAt: closed,
+              }),
+              providerDeals: [deal],
+            }),
+          );
+        }
+        if (reject || unsettled) {
           expect(orderService.applyFill).not.toHaveBeenCalled();
           expect(adapter.modifyOrder).not.toHaveBeenCalled();
           return;

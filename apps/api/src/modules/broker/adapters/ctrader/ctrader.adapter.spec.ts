@@ -1113,7 +1113,7 @@ describe('CTraderAdapter', () => {
       await expect(adapter.getPositionById('7654321')).resolves.toBeNull();
     });
 
-    it('returns independently observed broker P&L without requesting a spot quote', async () => {
+    it('returns independently observed broker P&L while refreshing a cold display quote', async () => {
       scriptReconcile([SAMPLE_POSITION], []);
       server.on(CTRADER_PAYLOAD_TYPE.GET_POSITION_UNREALIZED_PNL_REQ, (payload, envelope) =>
         echo(
@@ -1138,7 +1138,19 @@ describe('CTraderAdapter', () => {
           markObservedAt: expect.any(Date),
         }),
       ]);
-      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ)).toBeUndefined();
+      // Join the existing read-only flight, not a new order request.
+      await adapter['fetchSpotQuote'](
+        adapter['requireCurrentSession'](),
+        SAMPLE_POSITION.tradeData.symbolId,
+      );
+      expect(await adapter.getOpenPositionDisplay()).toEqual([
+        expect.objectContaining({
+          externalOrderId: '7654321',
+          currentPrice: '1.08675',
+          unrealisedPnl: '123.45',
+        }),
+      ]);
+      expect(findRequest(server, CTRADER_PAYLOAD_TYPE.SUBSCRIBE_SPOTS_REQ)).toBeDefined();
       expect(findRequest(server, CTRADER_PAYLOAD_TYPE.NEW_ORDER_REQ)).toBeUndefined();
     });
 

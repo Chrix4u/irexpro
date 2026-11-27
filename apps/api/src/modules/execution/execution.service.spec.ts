@@ -697,6 +697,41 @@ describe('ExecutionService', () => {
       );
     });
 
+    it('persists distinct native order and position IDs on the OPEN trade', async () => {
+      orchestrator.dispatchOrder.mockResolvedValueOnce({
+        ...filledOutcome,
+        providerOrderId: '81726001',
+        order: {
+          ...mockOrder,
+          providerOrderId: '81726001',
+          providerPositionId: '91837002',
+        },
+      });
+      const trade = await service.executeTrade('user-1', approvedDecision);
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        'trade-1',
+        expect.objectContaining({
+          status: TradeStatus.OPEN,
+          externalOrderId: '81726001',
+          externalPositionId: '91837002',
+        }),
+      );
+      expect(trade.externalPositionId).toBe('91837002');
+    });
+
+    it('does not invent a native position ID when the filled order has none', async () => {
+      orchestrator.dispatchOrder.mockResolvedValueOnce({
+        ...filledOutcome,
+        order: { ...mockOrder, providerPositionId: null },
+      });
+      await service.executeTrade('user-1', approvedDecision);
+      const openPatch = tradeRepo.update.mock.calls.find(
+        ([, patch]) => patch.status === TradeStatus.OPEN,
+      )?.[1];
+      expect(openPatch).toBeDefined();
+      expect(openPatch).not.toHaveProperty('externalPositionId');
+    });
+
     it('records TRADE_PREPARED and TRADE_OPENED audit events', async () => {
       await service.executeTrade('user-1', approvedDecision);
       expect(auditService.log).toHaveBeenCalledTimes(2);

@@ -135,6 +135,7 @@ async function gotoAiTrader(
     sessionGenerationString?: boolean;
     failAllocationRead?: boolean;
     recentClosedTradeAt?: string;
+    incompleteSettlement?: boolean;
     marketClosed?: boolean;
     marketClosedReads?: number;
   } = {},
@@ -218,7 +219,15 @@ async function gotoAiTrader(
         : fulfill(200, [
             rejectedExecution,
             executionPosition,
-            options.recentClosedTradeAt
+            options.incompleteSettlement
+              ? {
+                  ...closedExecution,
+                  exitPrice: null,
+                  realisedPnl: null,
+                  commission: null,
+                  swap: null,
+                }
+              : options.recentClosedTradeAt
               ? {
                   ...closedExecution,
                   openedAt: options.recentClosedTradeAt,
@@ -233,7 +242,15 @@ async function gotoAiTrader(
       return options.failExecutionReads
         ? fulfill(500, { statusCode: 500, message: "Internal Server Error" })
         : fulfill(200, [
-            options.recentClosedTradeAt
+            options.incompleteSettlement
+              ? {
+                  ...closedExecution,
+                  exitPrice: null,
+                  realisedPnl: null,
+                  commission: null,
+                  swap: null,
+                }
+              : options.recentClosedTradeAt
               ? {
                   ...closedExecution,
                   openedAt: options.recentClosedTradeAt,
@@ -591,6 +608,38 @@ test.describe("AI Trader novice workflow", () => {
     assertNoConsoleErrors(page);
     assertNoFailedRequests(page);
     assertNoExternalRequests(page);
+  });
+
+  test("history cards keep settlement warnings full-width and details responsive", async ({ page }) => {
+    await gotoAiTrader(page, { incompleteSettlement: true });
+
+    for (const selector of [".ai-section--closed-trades", ".ai-section--activity"]) {
+      const card = page.locator(selector);
+      const row = card.locator(".ai-activity-row").filter({
+        has: page.getByText(/Broker settlement incomplete\. Missing:/),
+      });
+      const warning = row.getByRole("status").filter({
+        hasText: /Broker settlement incomplete/,
+      });
+      await expect(warning).toBeVisible();
+      await expect(warning).toHaveCSS("grid-column-start", "1");
+      await expect(warning).toHaveCSS("grid-column-end", "-1");
+      const layout = await row.evaluate((element) => {
+        const detail = element.querySelector(".ai-order-detail-grid")!;
+        const note = element.querySelector(".ai-activity-row__settlement-note[role='status']")!;
+        return {
+          detailWidth: detail.getBoundingClientRect().width,
+          warningWidth: note.getBoundingClientRect().width,
+          columns: getComputedStyle(detail).gridTemplateColumns.split(" ").length,
+          hasOverflow: element.scrollWidth > element.clientWidth + 1,
+        };
+      });
+      expect(layout.warningWidth).toBeGreaterThanOrEqual(layout.detailWidth - 2);
+      expect(layout.columns).toBeGreaterThanOrEqual(1);
+      expect(layout.columns).toBeLessThanOrEqual(3);
+      expect(layout.hasOverflow).toBe(false);
+    }
+    await assertNoHorizontalOverflow(page);
   });
 
   test("stacks every position metric on its own desktop row", async ({

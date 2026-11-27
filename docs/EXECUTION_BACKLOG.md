@@ -264,3 +264,17 @@ Next: finish CI/review of diagnostics and UI, then the read-only statement compa
 - Aged DEMO recovery previously lacked the authenticated entry-order fallback already used by the recent settlement path. #861 adds the bounded read-only fallback, explicit unresolved-identity outcome and order-details account/order validation. Regression tests distinguish stored linkage, distinct broker-returned position ID and missing evidence; mismatch continues to fail closed.
 - Retarget #861 to main for full integrated CI, preserving #857 as the prior independently green candidate. Do not merge both independently. #841/#859 remain separate pending authenticated history-boundary evidence.
 - Source changes do not establish provider availability, settle historical records or authorize execution. Require exact-revision CI and independent review, then operator-gated deployment and account-scoped evidence.
+
+
+### P0 native position regression — opening record identity
+
+- Source comparison proves the Nov 24 identifier separation (02614a97) changed the mapped provider order ID from the legacy position ID to the native ORDER ID, but the OPEN trade transition kept copying only that ID. The persisted order already holds providerPositionId, so the trade row lost the separate position reference even though downstream position readers prefer externalPositionId.
+- Correct the OPEN transition to persist the already-recorded provider position ID in the same existing status CAS when available; preserve the legacy absent-ID behavior. Add distinct-ID and absent-ID regressions. No broker request, authority, risk, or historical-record repair is introduced by this patch.
+- Require CI and independent review. Account-scoped operational evidence remains necessary to establish actual affected records and to verify new valuation and closure behavior. Existing historical rows require separately verified native linkage, not blanket ID copying.
+
+
+### Consolidated regression release candidate — 2026-11-27
+
+- Combine #866 responsive cards, #867 informational quote refresh, #868 native OPEN trade position identity, and #869 recent settlement recovery into one candidate based on aea3d637. The four source change sets occupy distinct files. Preserve individual reviewed-source blobs, except #869 lint formatting corrections and this checkpoint.
+- Individual #866/#867/#868 required checks passed; #869 API tests passed but formatting prevented its build. Require full exact-head integrated API/DB/UI CI and independent review before merge. Do not merge the component PRs separately after integration.
+- Latest runtime guard still reports active sessions and recent uncertain broker orders. No release or financial record change performed. No authority or risk gate relaxation. Independent review and quiescent guarded deployment required. Operator UAT supplied a broker-confirmed close with missing app economics; no private broker identifiers or account figures in this public repository. Verify scoped native evidence, financial fields, separate provider and observation timestamps, and new lifecycle telemetry before incident closure.
