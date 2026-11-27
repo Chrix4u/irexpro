@@ -1233,6 +1233,59 @@ describe('ReconciliationResolutionService', () => {
       expect(tradeRepo.update).not.toHaveBeenCalled();
       expect(auditService.log).not.toHaveBeenCalled();
     });
+    const missingSwap = () =>
+      baseTrade({
+        ...missing(),
+        externalPositionId: '261975747',
+        externalOrderId: '123456789',
+        realisedPnl: '-2.88000000',
+        commission: '-1.20000000',
+        exitPrice: '0.83298000',
+      });
+    it('fills only missing swap after exact agreement with existing native settlement', async () => {
+      const trade = missingSwap();
+      expect(await service.backfillClosedDemoSettlement(request(trade))).toBe(true);
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          externalPositionId: trade.externalPositionId,
+          realisedPnl: trade.realisedPnl,
+          commission: trade.commission,
+          exitPrice: trade.exitPrice,
+          closedAt: trade.closedAt,
+          swap: expect.objectContaining({ _type: 'isNull' }),
+        }),
+        { swap: '0.00' },
+      );
+      expect(eventBus.publish).not.toHaveBeenCalled();
+    });
+    it.each([
+      { realisedPnl: '-2.89' },
+      { commission: '-1.21' },
+      { exitPrice: '0.83299' },
+      { externalPositionId: null },
+      { swap: '0.00' },
+    ])('does not repair swap with missing or contradictory evidence: %j', async (changes) => {
+      expect(
+        await service.backfillClosedDemoSettlement(request(baseTrade({ ...missingSwap(), ...changes }))),
+      ).toBe(false);
+      expect(tradeRepo.update).not.toHaveBeenCalled();
+      expect(auditService.log).not.toHaveBeenCalled();
+    });
+    it('does not repair swap for LIVE or ambiguous deals', async () => {
+      expect(
+        await service.backfillClosedDemoSettlement({ ...request(missingSwap()), accountType: 'LIVE' }),
+      ).toBe(false);
+      expect(
+        await service.backfillClosedDemoSettlement(request(missingSwap(), [broker(), broker()])),
+      ).toBe(false);
+      expect(tradeRepo.update).not.toHaveBeenCalled();
+    });
+    it('does not audit swap repair after a concurrent write wins the CAS', async () => {
+      tradeRepo.update.mockResolvedValueOnce({ affected: 0 });
+      expect(await service.backfillClosedDemoSettlement(request(missingSwap()))).toBe(false);
+      expect(auditService.log).not.toHaveBeenCalled();
+    });
+
     it('preserves an existing exactly matching swap while recovering missing economics', async () => {
       const trade = baseTrade({ ...missing(), swap: '-0.12500000' });
       expect(
