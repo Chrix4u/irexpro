@@ -84,8 +84,27 @@ production runtime.
   typed refusals `REVERSAL_INPUT_REQUIRED`, `REVERSAL_UNSUPPORTED_INSTRUMENT`,
   `REVERSAL_INPUT_OUT_OF_RANGE`; tampering with inputs, expectations, records
   or definitions is a typed refusal.
-- [ ] **P1-3** Reliability-layer consolidation spec (A3) — one service,
-  shared floors, explicit sample-count ladders.
+- [x] **P1-3** Reliability-layer consolidation spec (A3): one service,
+  shared floors, explicit sample-count ladders. Delivered →
+  `AI_ENGINE_V2_P1_3_RELIABILITY_CONSOLIDATION_SPEC_20261127.md` +
+  executable mirror
+  `apps/api/scripts/research/v2-reliability-gate-contract.cjs` (+ test, CI
+  step). Acceptance: nine-gate inventory with verified floors and invocation
+  sites; one sample ladder (COLD < 3 → SCOUT 3-5 → MEANINGFUL ≥ 6 → cap 20)
+  with G4's mature handoff promoted to the ladder rule; one floor set per
+  tier taking the strictest observed V1 value; one verdict vocabulary and
+  authority gradient (NONE → SHADOW_ONLY → REDUCED → PROVISIONAL → ADVISORY
+  → PAPER_FULL → FULL); extraction seams SEAM-1/2/3 defined with
+  CI-verified scheduler/collector anchors (the phase-2 §13 runOnce
+  requirement); frozen disagreement corpus `RL-D01..RL-D12` (10 divergence
+  records + 2 controls, verdicts computed by faithful mirrors and
+  reconciled on every run); typed refusals
+  (`RELIABILITY_INPUT_REQUIRED`, `RELIABILITY_UNSUPPORTED_SURFACE`,
+  `RELIABILITY_INPUT_OUT_OF_RANGE`); tampering with sources, corpus or
+  statistics is a typed refusal (21-test suite). Verified: floors span
+  3→20 samples and PF 0.75→2.0 across the nine gates; the composition veto
+  covers 2 of G1's ten failure reasons (corpus RL-D07); the advisory
+  overlay multiplies risk to a 0.2 floor and can never veto.
 - [ ] **P1-4** Calibration-service consolidation spec (A4/B4) including the
   pre-outcome prediction registration format (V2-7 scoreboard).
 - [x] **P1-5** Exit-specification consolidation spec (A7/G1): parameterized
