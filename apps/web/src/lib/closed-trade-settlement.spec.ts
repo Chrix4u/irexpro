@@ -1,4 +1,4 @@
-import { hasPendingClosedTradeSettlement, missingClosedTradeSettlementFields } from './closed-trade-settlement';
+import { closedTradeCurrencyCoverage, hasPendingClosedTradeSettlement, missingClosedTradeSettlementFields } from './closed-trade-settlement';
 
 const complete = {
   status: 'CLOSED',
@@ -55,5 +55,18 @@ describe('missingClosedTradeSettlementFields', () => {
       status: 'OPEN',
       exitPrice: null,
     })).toEqual([]);
+  });
+});
+
+describe('closed trade currency breakdown coverage', () => {
+  it('does not display zero monetary totals for an entirely incomplete currency', () => {
+    expect(closedTradeCurrencyCoverage({ pnlTradeCount: 0, totalTrades: 2 }))
+      .toEqual({ hasKnownTotals: false, label: '0 of 2 records with complete settlement fields' });
+  });
+
+  it('shows totals for a separate complete currency and a partial cohort', () => {
+    expect(closedTradeCurrencyCoverage({ pnlTradeCount: 1, totalTrades: 1 }).hasKnownTotals).toBe(true);
+    expect(closedTradeCurrencyCoverage({ pnlTradeCount: 1, totalTrades: 3 }))
+      .toEqual({ hasKnownTotals: true, label: '1 of 3 records with complete settlement fields' });
   });
 });
