@@ -611,6 +611,15 @@ describe('StateReconciliationService', () => {
         orderRepo.find.mockResolvedValueOnce([orphan]).mockResolvedValue(distinct ? [linked] : []);
         tradeRepo.find.mockResolvedValue([]);
         tradeRepo.findOne.mockResolvedValue(terminal);
+        adapter.getOrderById.mockResolvedValue({
+          providerOrderId: terminal.externalOrderId,
+          providerPositionId: '8422910',
+          status: 'FILLED',
+          instrument: terminal.instrument,
+          direction: terminal.direction,
+          filledQuantity: terminal.lotSize,
+          avgFillPrice: terminal.fillPrice,
+        });
         adapter.getClosedTrades.mockResolvedValue([deal]);
         orderService.applyFill.mockResolvedValue({ ...orphan, status: OrderStatus.FILLED });
         await service.runForConnection({
@@ -621,6 +630,8 @@ describe('StateReconciliationService', () => {
           new Date(opened.getTime() - 60_000),
           expect.any(Date),
         );
+        if (distinct) expect(adapter.getOrderById).not.toHaveBeenCalled();
+        else expect(adapter.getOrderById).toHaveBeenCalledWith(terminal.externalOrderId);
         expect(orderService.applyFill).toHaveBeenCalledTimes(1);
         expect(orderService.applyFill).toHaveBeenCalledWith(
           'aged-close-order-1',

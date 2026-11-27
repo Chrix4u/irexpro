@@ -1728,10 +1728,11 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         };
         throw mapCtraderError(errorPayload.errorCode, errorPayload.description);
       }
-      const payload = expectCtraderPayload<{ order?: CtraderOrder; deal?: CtraderDeal[] }>(
-        response,
-        CTRADER_PAYLOAD_TYPE.ORDER_DETAILS_RES,
-      );
+      const payload = expectCtraderPayload<{
+        ctidTraderAccountId: number;
+        order?: CtraderOrder;
+        deal?: CtraderDeal[];
+      }>(response, CTRADER_PAYLOAD_TYPE.ORDER_DETAILS_RES);
       if (!payload.order) {
         // A 200-style answer without the order object is malformed — NEVER
         // interpreted as "not found" (null is reserved for the provider's
@@ -1739,6 +1740,25 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         throw new BrokerAdapterError(
           BrokerErrorCode.BROKER_SERVER_ERROR,
           'cTrader order-details response is missing the order payload — outcome cannot be recorded.',
+        );
+      }
+      const relatedDeals = payload.deal ?? [];
+      if (
+        payload.ctidTraderAccountId !== parseCtraderId(session.accountId, 'ctidTraderAccountId') ||
+        String(payload.order.orderId) !== providerOrderId ||
+        (payload.deal !== undefined && !Array.isArray(payload.deal)) ||
+        relatedDeals.some(
+          (deal) =>
+            !deal ||
+            deal.orderId !== payload.order!.orderId ||
+            !Number.isSafeInteger(deal.positionId) ||
+            deal.positionId <= 0,
+        ) ||
+        new Set(relatedDeals.map((deal) => deal.positionId)).size > 1
+      ) {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.BROKER_SERVER_ERROR,
+          'cTrader order-details response identity is inconsistent.',
         );
       }
       await this.fetchSymbolsList(session);
