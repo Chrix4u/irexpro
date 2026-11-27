@@ -133,11 +133,23 @@ export class ReconciliationResolutionService {
       return false;
     }
     const p = proof.provider;
+    // A previously recorded financing amount is not missing. Preserve it if
+    // the broker agrees exactly, and defer contradictory or invalid evidence.
+    if (trade.swap !== null) {
+      const storedSwap = ExactDecimal.tryParse(trade.swap);
+      const providerSwap = p.swap == null ? null : ExactDecimal.tryParse(p.swap);
+      if (!storedSwap || !providerSwap || !storedSwap.eq(providerSwap)) {
+        this.logger.warn(
+          `DEMO settlement deferred for trade ${trade.id}: EXISTING_SWAP_CONFLICT`,
+        );
+        return false;
+      }
+    }
     const patch: Partial<Trade> = {
       exitPrice: p.closePrice,
       realisedPnl: p.realisedPnl,
       commission: p.commission,
-      swap: p.swap,
+      ...(trade.swap === null ? { swap: p.swap } : {}),
     };
     if (
       (trade.pathObservationCount ?? 0) > 0 &&
@@ -169,6 +181,8 @@ export class ReconciliationResolutionService {
         realisedPnl: IsNull(),
         commission: IsNull(),
         exitPrice: IsNull(),
+        // Also fence concurrent writes to swap, including NULL -> known.
+        swap: trade.swap === null ? IsNull() : trade.swap,
       },
       patch as never,
     );

@@ -1197,6 +1197,7 @@ describe('ReconciliationResolutionService', () => {
           realisedPnl: expect.objectContaining({ _type: 'isNull' }),
           commission: expect.objectContaining({ _type: 'isNull' }),
           exitPrice: expect.objectContaining({ _type: 'isNull' }),
+          swap: expect.objectContaining({ _type: 'isNull' }),
         }),
         expect.objectContaining({
           realisedPnl: '-2.88',
@@ -1230,6 +1231,38 @@ describe('ReconciliationResolutionService', () => {
         ).toBe(false);
       }
       expect(tradeRepo.update).not.toHaveBeenCalled();
+      expect(auditService.log).not.toHaveBeenCalled();
+    });
+    it('preserves an existing exactly matching swap while recovering missing economics', async () => {
+      const trade = baseTrade({ ...missing(), swap: '-0.12500000' });
+      expect(await service.backfillClosedDemoSettlement(
+        request(trade, [{ ...broker(), swap: '-0.125' }]),
+      )).toBe(true);
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        expect.objectContaining({ swap: '-0.12500000' }),
+        expect.not.objectContaining({ swap: expect.anything() }),
+      );
+      expect(tradeRepo.update.mock.calls[0][1]).not.toHaveProperty('swap');
+    });
+    it.each(['-0.01', 'invalid'])(
+      'defers recovery when stored swap %s contradicts broker evidence',
+      async (swap) => {
+        expect(await service.backfillClosedDemoSettlement(
+          request(baseTrade({ ...missing(), swap })),
+        )).toBe(false);
+        expect(tradeRepo.update).not.toHaveBeenCalled();
+        expect(auditService.log).not.toHaveBeenCalled();
+      },
+    );
+    it('does not book settlement if the swap compare-and-set loses a race', async () => {
+      tradeRepo.update.mockResolvedValueOnce({ affected: 0 });
+      expect(await service.backfillClosedDemoSettlement(
+        request(baseTrade({ ...missing(), swap: '0.00000000' })),
+      )).toBe(false);
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        expect.objectContaining({ swap: '0.00000000' }),
+        expect.anything(),
+      );
       expect(auditService.log).not.toHaveBeenCalled();
     });
     it('never writes ambiguous, incompatible or unsigned broker settlements', async () => {
