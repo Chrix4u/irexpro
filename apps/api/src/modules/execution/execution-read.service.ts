@@ -135,7 +135,7 @@ function ratio(grossProfit: string, grossLoss: string): number | null {
 }
 
 function currencySummary(row: ClosedTradeAggregateRow): ClosedTradeCurrencySummary | null {
-  if (!row.accountCurrency) return null;
+  if (!row.accountCurrency?.trim()) return null;
   const totalTrades = Number(row.totalTrades) || 0;
   const pnlTradeCount = Number(row.pnlTradeCount) || 0;
   const wins = Number(row.wins) || 0;
@@ -256,6 +256,18 @@ export class ExecutionReadService {
       throw new BadRequestException('instrument is too long');
     }
 
+    // Keep all closed records in the ALL report, but use one consistent cohort
+    // for monetary totals and outcome metrics. Missing fees are not zero.
+    // Completeness of stored fields is not independent broker provenance.
+    const complete = [
+      '"trade"."realised_pnl" IS NOT NULL',
+      '"trade"."commission" IS NOT NULL',
+      '"trade"."swap" IS NOT NULL',
+      '"trade"."exit_price" IS NOT NULL',
+      '"trade"."account_currency" IS NOT NULL',
+      `BTRIM("trade"."account_currency") <> ''`,
+    ].join(' AND ');
+
     const baseQuery = this.tradeRepo.createQueryBuilder('trade');
     baseQuery.where('trade.userId = :userId', { userId });
     baseQuery.andWhere('trade.status = :status', { status: TradeStatus.CLOSED });
@@ -268,6 +280,8 @@ export class ExecutionReadService {
     if (to) baseQuery.andWhere('trade.closedAt <= :to', { to });
     if (instrument) baseQuery.andWhere('trade.instrument = :instrument', { instrument });
     if (direction) baseQuery.andWhere('trade.direction = :direction', { direction });
+    // Gross outcome filters and aggregate metrics must select the same cohort.
+    if (outcome !== 'ALL') baseQuery.andWhere(complete);
     if (outcome === 'WIN') baseQuery.andWhere('trade.realisedPnl > 0');
     if (outcome === 'LOSS') baseQuery.andWhere('trade.realisedPnl < 0');
     if (outcome === 'FLAT') baseQuery.andWhere('trade.realisedPnl = 0');
@@ -281,17 +295,6 @@ export class ExecutionReadService {
       .take(pageSize)
       .getManyAndCount();
 
-    // Keep all closed records in the report, but use one consistent cohort
-    // for monetary totals and outcome metrics. Missing fees are not zero.
-    // Completeness of stored fields is not independent broker provenance.
-    const complete = [
-      '"trade"."realised_pnl" IS NOT NULL',
-      '"trade"."commission" IS NOT NULL',
-      '"trade"."swap" IS NOT NULL',
-      '"trade"."exit_price" IS NOT NULL',
-      '"trade"."account_currency" IS NOT NULL',
-      `BTRIM("trade"."account_currency") <> ''`,
-    ].join(' AND ');
     const settledOnly = (aggregate: string) => `${aggregate} FILTER (WHERE ${complete})`;
     const sum = (expression: string) => `COALESCE(${settledOnly(`SUM(${expression})`)}, 0)`;
     const count = settledOnly('COUNT(*)');

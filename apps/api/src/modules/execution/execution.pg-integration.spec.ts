@@ -848,27 +848,52 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
         ('report-no-fee', 'USD', 500, NULL, 0, 1.11),
         ('report-no-swap', 'USD', 400, -10, NULL, 1.11),
         ('report-no-exit', 'USD', 300, -10, 0, NULL),
-        ('report-no-currency', NULL, 200, -10, 0, 1.11)
+        ('report-no-currency', NULL, 200, -10, 0, 1.11),
+        ('report-complete-flat', 'USD', 0, 0, 0, 1.10),
+        ('report-incomplete-loss', 'USD', -500, NULL, 0, 1.09),
+        ('report-incomplete-flat', 'USD', 0, 0, NULL, 1.10),
+        ('report-blank-currency', '   ', 900, 0, 0, 1.11)
       ) AS v(key, currency, gross, fee, swap, exit)`,
       [userId, connectionId],
     );
     const report = await new ExecutionReadService(tradeRepo).listClosedTradeReport(userId, {
       brokerConnectionId: connectionId,
     });
-    expect(report.total).toBe(6);
-    expect(report.trades).toHaveLength(6);
+    expect(report.total).toBe(10);
+    expect(report.trades).toHaveLength(10);
     expect(report.summary).toMatchObject({
-      totalTrades: 6,
-      pnlTradeCount: 2,
-      unresolvedPnlCount: 4,
+      totalTrades: 10,
+      pnlTradeCount: 3,
+      unresolvedPnlCount: 7,
       wins: 1,
       losses: 1,
-      flats: 0,
+      flats: 1,
       accountCurrency: 'USD',
     });
     expect(Number(report.summary.grossRealisedPnl)).toBe(90);
     expect(Number(report.summary.totalCommission)).toBe(20);
     expect(Number(report.summary.netRealisedPnl)).toBe(70);
-    expect(Number(report.summary.expectancyPerTrade)).toBe(35);
+    expect(Number(report.summary.expectancyPerTrade)).toBeCloseTo(70 / 3);
+    for (const [outcome, gross, wins, losses, flats] of [
+      ['WIN', 100, 1, 0, 0],
+      ['LOSS', -10, 0, 1, 0],
+      ['FLAT', 0, 0, 0, 1],
+    ] as const) {
+      const filtered = await new ExecutionReadService(tradeRepo).listClosedTradeReport(userId, {
+        brokerConnectionId: connectionId,
+        outcome,
+      });
+      expect(filtered.total).toBe(1);
+      expect(filtered.trades).toHaveLength(1);
+      expect(filtered.summary).toMatchObject({
+        totalTrades: 1,
+        pnlTradeCount: 1,
+        unresolvedPnlCount: 0,
+        wins,
+        losses,
+        flats,
+      });
+      expect(Number(filtered.summary.grossRealisedPnl)).toBe(gross);
+    }
   });
 });
