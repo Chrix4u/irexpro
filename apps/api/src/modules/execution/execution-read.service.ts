@@ -295,7 +295,10 @@ export class ExecutionReadService {
     const settledOnly = (aggregate: string) => `${aggregate} FILTER (WHERE ${complete})`;
     const sum = (expression: string) => `COALESCE(${settledOnly(`SUM(${expression})`)}, 0)`;
     const count = settledOnly('COUNT(*)');
-    const net = `${sum('"trade"."realised_pnl"')} - ${sum('ABS("trade"."commission")')} + ${sum('"trade"."swap"')}`;
+    const gross = sum('"trade"."realised_pnl"');
+    const commission = sum('ABS("trade"."commission")');
+    const swap = sum('"trade"."swap"');
+    const net = `${gross} - ${commission} + ${swap}`;
     const summaryQuery = baseQuery.clone();
     const rawRows = (await summaryQuery
       .select('"trade"."account_currency"', 'accountCurrency')
@@ -316,7 +319,7 @@ export class ExecutionReadService {
       .addSelect(sum('ABS("trade"."commission")'), 'totalCommission')
       .addSelect(sum('"trade"."swap"'), 'totalSwap')
       .addSelect(net, 'netRealisedPnl')
-      .addSelect(`${sum('ABS("trade"."commission")')} - ${sum('"trade"."swap"')}`, 'totalExplicitCosts')
+      .addSelect(`${commission} - ${swap}`, 'totalExplicitCosts')
       .addSelect(
         settledOnly('AVG(CASE WHEN "trade"."realised_pnl" > 0 THEN "trade"."realised_pnl" END)'),
         'averageWin',
