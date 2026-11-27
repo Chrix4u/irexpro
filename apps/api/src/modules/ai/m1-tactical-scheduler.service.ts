@@ -29,7 +29,10 @@ import { PAPER_BROKER_AWARE_EXPOSURE_SEARCH_FLOOR } from '../execution/services/
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { TradingSessionStatus } from '../execution/entities/trading-session.entity';
 import { AiSignalService } from './ai-signal.service';
-import { brandServerM1Signal } from '../strategy/server-m1-signal-origin';
+import {
+  brandServerM1Signal,
+  PRIMARY_M1_MODEL_IDENTITY,
+} from '../strategy/server-m1-signal-origin';
 import { canonicalSignalPrice } from './canonical-signal-price';
 import { MacroEventRiskService } from './macro-event-risk.service';
 import { DemoPortfolioBrakeConsentService } from './demo-portfolio-brake-consent.service';
@@ -4296,7 +4299,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           timeframe: 'M1',
           strategyCode:
             professionalDemoPhase && !useProfessionalM1Fallback
-              ? 'external-irexpro-multimodel-ensemble'
+              ? PRIMARY_M1_MODEL_IDENTITY.strategyCode
               : 'external-irexpro-m1-tactical',
           marketRegime: useM5EarlyTransitionHandoff
             ? 'TRANSITION'
@@ -4311,7 +4314,7 @@ export class M1TacticalSchedulerService implements OnModuleInit, OnModuleDestroy
           generatedAt: new Date(decisionTime),
           modelVersion:
             professionalDemoPhase && !useProfessionalM1Fallback
-              ? `external-provider/${MULTIMODEL_ENGINE_CODE}/demo-v1`
+              ? PRIMARY_M1_MODEL_IDENTITY.modelVersion
               : `external-provider/irexpro-m1-tactical/${candidate.policyVersion}`,
           metadata: {
             signal_source: 'EXTERNAL_PROVIDER',

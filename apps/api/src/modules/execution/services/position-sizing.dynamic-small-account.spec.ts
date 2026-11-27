@@ -230,6 +230,29 @@ describe('broker-aware account dynamic lot size (DEMO only)', () => {
     expect(result.inputs.lotSelectionReason).toBe('BROKER_RISK_SCALED_DOWN');
   });
 
+  it.each(['0.03', '0.05', '0.08', '0.09'])(
+    'LIVE accepts broker-grid volume %s below the preferred 0.10 when affordable',
+    async (lots) => {
+      const { size } = fixture({
+        equity: '1000.00',
+        accountType: 'LIVE',
+        brokerId: 'pepperstone-ctrader',
+        instrument: standardCent,
+        marginPerLot: '218',
+        stopLoss: '1.08450',
+        leverage: 300,
+      });
+      const result = await size('1000.00', lots);
+      expect(result.lots).toBe(lots);
+      expect(result.inputs.liveMicroPilotEnvelope).toMatchObject({
+        preferredMinimumLots: '0.10',
+        requestedMinimumLots: '0.01',
+        brokerMinimumLots: '0.01',
+      });
+      expect(result.inputs.lotSelectionReason).toBe('BROKER_RISK_SCALED_DOWN');
+    },
+  );
+
   it('LIVE retains 0.10+ preference when affordable, with a hard 1.00 ceiling', async () => {
     const { size } = fixture({
       equity: '1000.00',

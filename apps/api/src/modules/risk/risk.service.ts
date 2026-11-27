@@ -40,6 +40,7 @@ import {
 } from '../execution/interfaces/execution-authority';
 import { RiskGrantService } from './risk-grant.service';
 import { RiskOrderGeometryService } from './risk-order-geometry.service';
+import { rebaseModelMarketGeometry } from './model-market-geometry';
 import { DomainEventBus } from '../events/event-bus.service';
 import { DomainEventType } from '../events/enums/domain-event-type.enum';
 import { ModuleRef } from '@nestjs/core';
@@ -1368,35 +1369,21 @@ export class RiskService {
       trade.allocationAwarePaperSizing === true &&
       trade.paperMarketReferenceEntryPrice
     ) {
-      const referenceEntry = ExactDecimal.tryParse(trade.paperMarketReferenceEntryPrice);
-      const originalStop = ExactDecimal.tryParse(trade.stopLoss ?? '');
-      const originalTake = ExactDecimal.tryParse(trade.takeProfit ?? '');
-      if (
-        referenceEntry?.isPositive() &&
-        originalStop?.isPositive() &&
-        originalTake?.isPositive()
-      ) {
-        const stopDistance = referenceEntry.sub(originalStop).abs();
-        const targetDistance = originalTake.sub(referenceEntry).abs();
-        const geometryDirectionValid =
-          trade.direction === 'BUY'
-            ? originalStop.lt(referenceEntry) && originalTake.gt(referenceEntry)
-            : originalStop.gt(referenceEntry) && originalTake.lt(referenceEntry);
-        if (geometryDirectionValid && stopDistance.isPositive() && targetDistance.isPositive()) {
-          trade.stopLoss =
-            trade.direction === 'BUY'
-              ? entry.sub(stopDistance).toString()
-              : entry.add(stopDistance).toString();
-          trade.takeProfit =
-            trade.direction === 'BUY'
-              ? entry.add(targetDistance).toString()
-              : entry.sub(targetDistance).toString();
-          appliedRules.push(
-            session.executionMode === ExecutionMode.PAPER_ONLY
-              ? 'PAPER_MARKET_GEOMETRY:REBASED'
-              : 'DEMO_MARKET_GEOMETRY:REBASED',
-          );
-        }
+      const rebased = rebaseModelMarketGeometry({
+        direction: trade.direction,
+        referenceEntry: trade.paperMarketReferenceEntryPrice,
+        stopLoss: trade.stopLoss ?? '',
+        takeProfit: trade.takeProfit ?? '',
+        executableEntry: entry,
+      });
+      if (rebased) {
+        trade.stopLoss = rebased.stopLoss;
+        trade.takeProfit = rebased.takeProfit;
+        appliedRules.push(
+          session.executionMode === ExecutionMode.PAPER_ONLY
+            ? 'PAPER_MARKET_GEOMETRY:REBASED'
+            : 'DEMO_MARKET_GEOMETRY:REBASED',
+        );
       }
     }
 

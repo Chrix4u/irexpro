@@ -1,6 +1,10 @@
 import {
   brandServerM1Signal,
+  evaluateM1PrimaryModelDecision,
+  EXTERNAL_IREXPRO_STRATEGY_CODES,
   hasServerM1Origin,
+  isServerPromotedExternalDemoModel,
+  PRIMARY_M1_MODEL_IDENTITY,
   isStrictLiveM1PrimarySignal,
 } from './server-m1-signal-origin';
 import type { AiSignalCandidate } from './interfaces/strategy.interface';
@@ -178,5 +182,108 @@ describe('SERVER-owned Pepperstone LIVE M1 primary provenance', () => {
       const candidate = brandServerM1Signal(signal(fields));
       expect(isStrictLiveM1PrimarySignal(candidate)).toBe(false);
     }
+  });
+});
+
+describe('account-independent primary-model decision classification', () => {
+  it('classifies the same model evidence identically for different account bindings', () => {
+    const demo = signal({
+      brokerConnectionId: 'demo-account',
+      tradingSessionId: 'demo-session',
+      suggestedVolume: 7,
+    });
+    const live = signal({
+      brokerConnectionId: 'live-account',
+      tradingSessionId: 'live-session',
+      suggestedVolume: 0.01,
+    });
+    expect(evaluateM1PrimaryModelDecision(demo)).toBe('QUALIFIED');
+    expect(evaluateM1PrimaryModelDecision(live)).toBe('QUALIFIED');
+    expect(isStrictLiveM1PrimarySignal(demo)).toBe(false);
+    expect(isStrictLiveM1PrimarySignal(live)).toBe(false);
+  });
+
+  it.each([
+    [{ multimodel_plan_b_paper_admitted: false }, 'PRIMARY_MODEL_NOT_ADMITTED'],
+    [{ m1_professional_fallback: true }, 'EXPERIMENTAL_OR_UNKNOWN_ROUTE'],
+    [{ m1_tactical_route: 'ABSTAIN' }, 'M1_TIMING_MISMATCH'],
+    [{ m1_tactical_route: 'M1_EARLY_TRANSITION' }, 'NATIVE_EXPERT_PROOF_MISSING'],
+  ])('classifies rejected primary evidence without granting authority', (metadata, reason) => {
+    const candidate = brandServerM1Signal(
+      signal({ metadata: { ...signal().metadata, ...metadata } }),
+    );
+    expect(evaluateM1PrimaryModelDecision(candidate)).toBe(reason);
+    expect(isStrictLiveM1PrimarySignal(candidate)).toBe(false);
+  });
+});
+
+describe('shared frozen model identity registry', () => {
+  it('pins the single-source strategy-code registry consumed by evidence SQL and guards', () => {
+    // Any change here is a deliberate model rollout affecting DEMO and LIVE
+    // evidence/guard queries simultaneously — it must never happen silently.
+    expect(EXTERNAL_IREXPRO_STRATEGY_CODES).toEqual({
+      legacyM1Tactical: 'external-irexpro-m1-tactical',
+      primaryEnsemble: 'external-irexpro-multimodel-ensemble',
+    });
+    expect(PRIMARY_M1_MODEL_IDENTITY.strategyCode).toBe(
+      EXTERNAL_IREXPRO_STRATEGY_CODES.primaryEnsemble,
+    );
+    expect(Object.isFrozen(EXTERNAL_IREXPRO_STRATEGY_CODES)).toBe(true);
+    expect(Object.isFrozen(PRIMARY_M1_MODEL_IDENTITY)).toBe(true);
+  });
+
+  it('recognizes the same primary identity without granting execution authority', () => {
+    const candidate = signal({ ...PRIMARY_M1_MODEL_IDENTITY });
+    expect(isServerPromotedExternalDemoModel(candidate)).toBe(true);
+    expect(evaluateM1PrimaryModelDecision(candidate)).toBe('QUALIFIED');
+    expect(isStrictLiveM1PrimarySignal(candidate)).toBe(false);
+    expect(isStrictLiveM1PrimarySignal(brandServerM1Signal(candidate))).toBe(true);
+  });
+
+  it.each(['m1-tactical-v1', 'm1-tactical-v2-m5-lifecycle'])(
+    'preserves historical DEMO model identity %s without LIVE promotion',
+    (version) => {
+      const candidate = brandServerM1Signal(
+        signal({
+          strategyCode: 'external-irexpro-m1-tactical',
+          modelVersion: `external-provider/irexpro-m1-tactical/${version}`,
+        }),
+      );
+      expect(isServerPromotedExternalDemoModel(candidate)).toBe(true);
+      expect(evaluateM1PrimaryModelDecision(candidate)).toBe('MODEL_IDENTITY_MISMATCH');
+      expect(isStrictLiveM1PrimarySignal(candidate)).toBe(false);
+    },
+  );
+
+  it('rejects unrecognized versions and timeframes in both existing boundaries', () => {
+    for (const fields of [{ modelVersion: 'unknown' }, { timeframe: 'M5' }]) {
+      const candidate = brandServerM1Signal(signal(fields));
+      expect(isServerPromotedExternalDemoModel(candidate)).toBe(false);
+      expect(isStrictLiveM1PrimarySignal(candidate)).toBe(false);
+    }
+  });
+});
+
+describe('offline DEMO route compatibility inventory', () => {
+  it.each([
+    'DEMO_CONTINUOUS_REVERSAL_EARLY_EVIDENCE',
+    'DEMO_ADVISORY_REVERSAL_EARLY_ENTRY_PILOT',
+    'DEMO_EXPERT_COUNTER_ENTRY_PILOT',
+    'DEMO_ALTERNATIVE_TIMING_TRIAL',
+    'HIGH_CONVICTION_RESCUE',
+    'M5_EARLY_TRANSITION_HANDOFF',
+    'EXTENSION_EXHAUSTION_DEMO_SCOUT',
+  ])('distinguishes recognized model identity from unqualified route %s', (route) => {
+    const candidate = brandServerM1Signal(
+      signal({
+        metadata: {
+          ...signal().metadata,
+          multimodel_execution_authority_path: route,
+        },
+      }),
+    );
+    expect(isServerPromotedExternalDemoModel(candidate)).toBe(true);
+    expect(evaluateM1PrimaryModelDecision(candidate)).toBe('PRIMARY_MODEL_NOT_ADMITTED');
+    expect(isStrictLiveM1PrimarySignal(candidate)).toBe(false);
   });
 });
