@@ -1,6 +1,7 @@
 import { ModuleRef } from '@nestjs/core';
 import { DataSource, Repository } from 'typeorm';
 import { ExecutionService } from './execution.service';
+import { ExecutionReadService } from './execution-read.service';
 import type { EmergencyFlattenProducer } from './jobs/emergency-flatten.producer';
 import { Trade } from './entities/trade.entity';
 import { TradingSession } from './entities/trading-session.entity';
@@ -826,5 +827,73 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
     );
     expect(orders).toHaveLength(1);
     expect(orders[0].status).toBe('FILLED');
+  });
+
+  it('reports only complete settlement rows while preserving incomplete history on PostgreSQL', async () => {
+    // Disposable CI fixture only: no provider calls and no real account data.
+    await dataSource.query(
+      `INSERT INTO trading.trades (
+        user_id, broker_connection_id, idempotency_key, instrument, direction,
+        lot_size, requested_entry_price, fill_price, stop_loss, take_profit,
+        status, account_currency, realised_pnl, commission, swap, exit_price,
+        opened_at, closed_at
+      )
+      SELECT $1::uuid, $2::uuid, v.key, 'EURUSD', 'BUY',
+        1, 1.10, 1.10, 0, 0, 'CLOSED', v.currency,
+        v.gross, v.fee, v.swap, v.exit,
+        '2026-01-01T10:00:00Z'::timestamptz, '2026-01-01T11:00:00Z'::timestamptz
+      FROM (VALUES
+        ('report-complete-win', 'USD', 100::numeric, -20::numeric, 0::numeric, 1.11::numeric),
+        ('report-complete-loss', 'USD', -10, 0, 0, 1.09),
+        ('report-no-fee', 'USD', 500, NULL, 0, 1.11),
+        ('report-no-swap', 'USD', 400, -10, NULL, 1.11),
+        ('report-no-exit', 'USD', 300, -10, 0, NULL),
+        ('report-no-currency', NULL, 200, -10, 0, 1.11),
+        ('report-complete-flat', 'USD', 0, 0, 0, 1.10),
+        ('report-incomplete-loss', 'USD', -500, NULL, 0, 1.09),
+        ('report-incomplete-flat', 'USD', 0, 0, NULL, 1.10),
+        ('report-blank-currency', '   ', 900, 0, 0, 1.11)
+      ) AS v(key, currency, gross, fee, swap, exit)`,
+      [userId, connectionId],
+    );
+    const report = await new ExecutionReadService(tradeRepo).listClosedTradeReport(userId, {
+      brokerConnectionId: connectionId,
+    });
+    expect(report.total).toBe(10);
+    expect(report.trades).toHaveLength(10);
+    expect(report.summary).toMatchObject({
+      totalTrades: 10,
+      pnlTradeCount: 3,
+      unresolvedPnlCount: 7,
+      wins: 1,
+      losses: 1,
+      flats: 1,
+      accountCurrency: 'USD',
+    });
+    expect(Number(report.summary.grossRealisedPnl)).toBe(90);
+    expect(Number(report.summary.totalCommission)).toBe(20);
+    expect(Number(report.summary.netRealisedPnl)).toBe(70);
+    expect(Number(report.summary.expectancyPerTrade)).toBeCloseTo(70 / 3);
+    for (const [outcome, gross, wins, losses, flats] of [
+      ['WIN', 100, 1, 0, 0],
+      ['LOSS', -10, 0, 1, 0],
+      ['FLAT', 0, 0, 0, 1],
+    ] as const) {
+      const filtered = await new ExecutionReadService(tradeRepo).listClosedTradeReport(userId, {
+        brokerConnectionId: connectionId,
+        outcome,
+      });
+      expect(filtered.total).toBe(1);
+      expect(filtered.trades).toHaveLength(1);
+      expect(filtered.summary).toMatchObject({
+        totalTrades: 1,
+        pnlTradeCount: 1,
+        unresolvedPnlCount: 0,
+        wins,
+        losses,
+        flats,
+      });
+      expect(Number(filtered.summary.grossRealisedPnl)).toBe(gross);
+    }
   });
 });

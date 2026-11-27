@@ -502,7 +502,7 @@ describe('StateReconciliationService', () => {
               demoCloseRecovery: {
                 recent: {
                   selected: 1,
-                  outcomes: reject ? { PROVIDER_DEAL_NOT_UNIQUE: 1 } : { FILLED_WITH_PROOF: 1 },
+                  outcomes: reject ? { PROVIDER_DEAL_ABSENT: 1 } : { FILLED_WITH_PROOF: 1 },
                 },
                 aged: { selected: 0, outcomes: {} },
               },

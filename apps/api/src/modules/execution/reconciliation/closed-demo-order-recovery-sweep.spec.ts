@@ -120,10 +120,10 @@ describe('aged cTrader-family DEMO closed-order proof (no freshness fence)', () 
     expect(reasonOf(proveAged({ providerClosedDeals: [{ ...deal, lotSize: '1.4' }] }))).toBe(
       'EXACT_BROKER_CLOSE_DEAL_ECONOMICS_MISMATCH',
     );
-    expect(reasonOf(proveAged({ providerClosedDeals: [] }))).toBe('PROVIDER_DEAL_NOT_UNIQUE');
+    expect(reasonOf(proveAged({ providerClosedDeals: [] }))).toBe('PROVIDER_DEAL_ABSENT');
     expect(
       reasonOf(proveAged({ providerClosedDeals: [deal, { ...deal, externalOrderId: '8422910' }] })),
-    ).toBe('PROVIDER_DEAL_NOT_UNIQUE');
+    ).toBe('PROVIDER_DEAL_MULTIPLE');
   });
 
   it('rejects future close timestamps and malformed provenance like the live path', () => {
@@ -204,6 +204,28 @@ describe('selectAgedDemoCloseRecoveryCandidates', () => {
     expect(second).toEqual(ids.slice(2, 4));
     // The final unvisited row is reached before wrapping to the head.
     expect(third).toEqual([...ids.slice(4), ...ids.slice(0, 1)]);
+  });
+
+  it('does not let recent attempts exhaust the historical recovery budget', () => {
+    const orders = ['a', 'b', 'c', 'd', 'e'].map((id) =>
+      stranded(id, `t-${id}`, new Date('2026-11-10T06:00:00Z')),
+    );
+    const attempted = new Set(['a', 'b']);
+    expect(
+      selectAgedDemoCloseRecoveryCandidates(orders, now, undefined, attempted).map((o) => o.id),
+    ).toEqual(['c', 'd']);
+    expect(
+      selectAgedDemoCloseRecoveryCandidates(orders, now, 'd', attempted).map((o) => o.id),
+    ).toEqual(['e', 'c']);
+  });
+
+  it('preserves ambiguity checks even when one competing order was attempted', () => {
+    const a = stranded('a', 't1', new Date('2026-11-10T06:00:00Z'));
+    const b = stranded('b', 't1', new Date('2026-11-10T06:30:00Z'));
+    const c = stranded('c', 't2', new Date('2026-11-10T07:00:00Z'));
+    expect(
+      selectAgedDemoCloseRecoveryCandidates([a, b, c], now, undefined, new Set(['a'])),
+    ).toEqual([c]);
   });
 
   it('bounds the batch to the documented budget', () => {
