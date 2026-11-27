@@ -77,6 +77,19 @@ describe('ExecutionReadService trading-cost accounting', () => {
       'totalExplicitCosts',
     );
 
+    // Every economic metric and its denominator must use the same cohort.
+    // Otherwise a NULL commission or swap is silently treated as zero.
+    for (const [expression, alias] of summaryQuery.addSelect.mock.calls) {
+      if (alias === 'totalTrades') continue;
+      for (const field of ['realisedPnl', 'commission', 'swap', 'exitPrice', 'accountCurrency']) {
+        expect(expression).toContain(`trade.${field} IS NOT NULL`);
+      }
+    }
+    expect(summaryQuery.addSelect).toHaveBeenCalledWith(
+      expect.stringContaining('COUNT(*) FILTER (WHERE'),
+      'pnlTradeCount',
+    );
+
     expect(summary.grossProfit).toBe('500.25');
     expect(summary.grossLoss).toBe('200.10');
     expect(summary.grossRealisedPnl).toBe('300.15');
@@ -85,5 +98,60 @@ describe('ExecutionReadService trading-cost accounting', () => {
     expect(summary.totalExplicitCosts).toBe('25.75');
     expect(summary.netRealisedPnl).toBe('274.40');
     expect(summary.expectancyPerTrade).toBe('137.20');
+  });
+
+  it('reports unknown financial totals if every closed record is incomplete', async () => {
+    const pageQuery = {
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getManyAndCount: jest.fn().mockResolvedValue([[], 2]),
+    };
+    const summaryQuery = {
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([
+        {
+          accountCurrency: 'USD',
+          totalTrades: '2',
+          pnlTradeCount: '0',
+          wins: '0',
+          losses: '0',
+          flats: '0',
+          grossProfit: '0',
+          grossLoss: '0',
+          grossRealisedPnl: '0',
+          netRealisedPnl: '0',
+          totalCommission: '0',
+          totalSwap: '0',
+          totalExplicitCosts: '0',
+        },
+      ]),
+    };
+    const baseQuery = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      clone: jest.fn().mockReturnValueOnce(pageQuery).mockReturnValueOnce(summaryQuery),
+    };
+    const repo = {
+      createQueryBuilder: jest.fn().mockReturnValue(baseQuery),
+    } as unknown as Repository<Trade>;
+
+    const { summary } = await new ExecutionReadService(repo).listClosedTradeReport(USER_ID);
+    expect(summary).toMatchObject({
+      totalTrades: 2,
+      pnlTradeCount: 0,
+      unresolvedPnlCount: 2,
+      accountCurrency: 'USD',
+      grossRealisedPnl: null,
+      netRealisedPnl: null,
+      totalCommission: null,
+      totalSwap: null,
+      totalExplicitCosts: null,
+      winRate: null,
+    });
   });
 });
