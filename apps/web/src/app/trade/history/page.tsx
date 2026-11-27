@@ -21,6 +21,7 @@ import {
 import { useAuth } from '@/context/auth-context';
 import { mapApiError } from '@/lib/error-mapping';
 import { loadClosedTradeReport } from '@/lib/trader-execution';
+import { hasPendingClosedTradeSettlement } from '@/lib/closed-trade-settlement';
 import './history.css';
 
 type FilterState = {
@@ -160,6 +161,7 @@ function formatTimestamp(value: string | null | undefined): string {
 }
 
 function formatHoldTime(trade: TradeExecutionView): string {
+  if (hasPendingClosedTradeSettlement(trade)) return 'Unverified';
   if (!trade.openedAt || !trade.closedAt) return '—';
   const start = Date.parse(trade.openedAt);
   const end = Date.parse(trade.closedAt);
@@ -767,7 +769,7 @@ export default function ClosedTradeHistoryPage() {
                 <strong>Included in executed P&amp;L</strong>
               </div>
               <div>
-                <span>Average hold</span>
+                <span>Average recorded hold</span>
                 <strong>
                   {formatAverageHold(summary?.averageHoldMinutes ?? null)}
                 </strong>
@@ -815,23 +817,30 @@ export default function ClosedTradeHistoryPage() {
                   <table className="history-table">
                     <thead>
                       <tr>
-                        <th>Closed</th>
+                        <th>Recorded close</th>
                         <th>Instrument</th>
                         <th>Side</th>
                         <th>Lot</th>
                         <th>Entry</th>
                         <th>Exit</th>
-                        <th>Realized P&amp;L</th>
+                        <th>Gross realized P&amp;L</th>
                         <th>Commission</th>
                         <th>Swap</th>
-                        <th>Close reason</th>
-                        <th>Hold</th>
+                        <th>Recorded close reason</th>
+                        <th>Recorded hold</th>
                       </tr>
                     </thead>
                     <tbody>
                       {report.trades.map((trade) => (
                         <tr key={trade.id}>
-                          <td>{formatTimestamp(trade.closedAt)}</td>
+                          <td>
+                            {formatTimestamp(trade.closedAt)}
+                            {hasPendingClosedTradeSettlement(trade) && (
+                              <div>
+                                <small>Settlement pending — time unverified</small>
+                              </div>
+                            )}
+                          </td>
                           <td>
                             <strong>{trade.instrument}</strong>
                           </td>
