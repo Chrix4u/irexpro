@@ -49,6 +49,15 @@ successors) which is explicitly out of V2 scope.
   (`31c4e862` + the P1-3 delta) whose gate-file constants and
   scheduler/collector seam anchors are content-verified on every CI run by
   `verifyReliabilityGatePaths` / `verifyOrchestrationSeams`.
+- **C-3 drift re-verification (2026-11-27, before the P1-4 delivery):**
+  `main` advanced `2f59fc74` → `aea3d637` (PR #861 "Integrated
+  reconciliation candidate with historical DEMO native identity recovery"
+  squash-merged after exact-revision CI, independent review and a guarded
+  staging deployment; release/operations stream, disjoint from V2 scope).
+  Both component-map drift detectors were executed against a disposable
+  worktree of `aea3d637`: **25/25 tests pass** — every mapped path exists
+  on the new `main` tree and the audit-count reconciliation is intact.
+  Verdict: **zero drift**; no V2 artifact line anchors are invalidated.
 
 ## 1. New backlog items
 
@@ -83,9 +92,16 @@ successors) which is explicitly out of V2 scope.
   + authority gradient, extraction seams SEAM-1/2/3 with CI-verified
   anchors, frozen corpus `RL-D01..RL-D12` (10 divergence + 2 controls;
   21-test suite, typed refusals, constant-anchor drift detection).
-- [ ] **P1-4** Calibration-service consolidation spec (A4/B4) with the
+- [x] **P1-4** Calibration-service consolidation spec (A4/B4) with the
   pre-outcome prediction registration format (V2-7 scoreboard). Inputs:
-  map v1 §4 + §6 unchanged. Not started.
+  map v1 §4 + §6 unchanged. Delivered (2026-11-27, stacked on the P1-3
+  branch) → `AI_ENGINE_V2_P1_4_CALIBRATION_CONSOLIDATION_SPEC_20261127.md`
+  + `apps/api/scripts/research/v2-calibration-contract.cjs` (+ test, CI
+  step): CAL-1 ladder/vocabulary/authority unification with the CL-D10
+  authority gap closed as an explicit tier rule; CAL-2 append-only
+  scoreboard (pre-outcome causality enforced, P4 excluded); frozen corpus
+  `CL-D01..CL-D12` computed by faithful mirrors (21-test suite, typed
+  refusals, 13-anchor drift detection).
 - [ ] **P1-5** Exit-specification consolidation spec (A7/G1). Inputs: map v1
   §5 unchanged; phase-2 adds the write-path edge (§14 E3) showing exits read
   settled evidence produced by the same scheduler cycle. Not started.
