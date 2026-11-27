@@ -9,16 +9,12 @@ export interface ClosedTradeSettlementFields {
   realisedPnl: string | null;
   commission: string | null;
   swap: string | null;
+  accountCurrency: string | null;
 }
 export function hasPendingClosedTradeSettlement(
   trade: ClosedTradeSettlementFields,
 ): boolean {
-  return trade.status === 'CLOSED' && (
-    trade.exitPrice === null ||
-    trade.realisedPnl === null ||
-    trade.commission === null ||
-    trade.swap === null
-  );
+  return missingClosedTradeSettlementFields(trade).length > 0;
 }
 
 /** Explain pending settlement using the actual missing broker fields, not estimated amounts. */
@@ -30,5 +26,18 @@ export function missingClosedTradeSettlementFields(trade: ClosedTradeSettlementF
     ['commission', 'commission'],
     ['swap', 'swap'],
   ];
-  return fields.filter(([key]) => trade[key] === null).map(([, label]) => label);
+  const missing = fields.filter(([key]) => trade[key] === null).map(([, label]) => label);
+  if (!trade.accountCurrency?.trim()) missing.push('account currency');
+  return missing;
+}
+
+/** Distinguish an empty financial cohort from a genuine zero-valued settlement. */
+export function closedTradeCurrencyCoverage(group: {
+  pnlTradeCount: number;
+  totalTrades: number;
+}): { hasKnownTotals: boolean; label: string } {
+  return {
+    hasKnownTotals: group.pnlTradeCount > 0,
+    label: group.pnlTradeCount + ' of ' + group.totalTrades + ' records with complete settlement fields',
+  };
 }

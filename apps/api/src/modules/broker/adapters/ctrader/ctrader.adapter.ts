@@ -1728,10 +1728,11 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         };
         throw mapCtraderError(errorPayload.errorCode, errorPayload.description);
       }
-      const payload = expectCtraderPayload<{ order?: CtraderOrder; deal?: CtraderDeal[] }>(
-        response,
-        CTRADER_PAYLOAD_TYPE.ORDER_DETAILS_RES,
-      );
+      const payload = expectCtraderPayload<{
+        ctidTraderAccountId: number;
+        order?: CtraderOrder;
+        deal?: CtraderDeal[];
+      }>(response, CTRADER_PAYLOAD_TYPE.ORDER_DETAILS_RES);
       if (!payload.order) {
         // A 200-style answer without the order object is malformed — NEVER
         // interpreted as "not found" (null is reserved for the provider's
@@ -1739,6 +1740,25 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         throw new BrokerAdapterError(
           BrokerErrorCode.BROKER_SERVER_ERROR,
           'cTrader order-details response is missing the order payload — outcome cannot be recorded.',
+        );
+      }
+      const relatedDeals = payload.deal ?? [];
+      if (
+        payload.ctidTraderAccountId !== parseCtraderId(session.accountId, 'ctidTraderAccountId') ||
+        String(payload.order.orderId) !== providerOrderId ||
+        (payload.deal !== undefined && !Array.isArray(payload.deal)) ||
+        relatedDeals.some(
+          (deal) =>
+            !deal ||
+            deal.orderId !== payload.order!.orderId ||
+            !Number.isSafeInteger(deal.positionId) ||
+            deal.positionId <= 0,
+        ) ||
+        new Set(relatedDeals.map((deal) => deal.positionId)).size > 1
+      ) {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.BROKER_SERVER_ERROR,
+          'cTrader order-details response identity is inconsistent.',
         );
       }
       await this.fetchSymbolsList(session);
@@ -1930,14 +1950,42 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       ctidTraderAccountId: parseCtraderId(session.accountId, 'ctidTraderAccountId'),
       returnProtectionOrders: false,
     });
-    const payload = expectCtraderPayload<{ position?: CtraderPosition[]; order?: CtraderOrder[] }>(
-      response,
-      CTRADER_PAYLOAD_TYPE.RECONCILE_RES,
-    );
-    return {
-      positions: Array.isArray(payload.position) ? payload.position : [],
-      orders: Array.isArray(payload.order) ? payload.order : [],
-    };
+    const payload = expectCtraderPayload<{
+      ctidTraderAccountId: number;
+      position?: CtraderPosition[];
+      order?: CtraderOrder[];
+    }>(response, CTRADER_PAYLOAD_TYPE.RECONCILE_RES);
+    // The response account is required by the provider contract. An omitted
+    // repeated field denotes an empty list, but a malformed list is not
+    // evidence that the account has no open positions or working orders.
+    if (
+      payload.ctidTraderAccountId !== parseCtraderId(session.accountId, 'ctidTraderAccountId') ||
+      (payload.position !== undefined && !Array.isArray(payload.position)) ||
+      (payload.order !== undefined && !Array.isArray(payload.order))
+    ) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.BROKER_SERVER_ERROR,
+        'cTrader reconciliation snapshot account or list structure is invalid.',
+      );
+    }
+    const positions = payload.position ?? [];
+    const positionIds = new Set<number>();
+    for (const position of positions) {
+      if (
+        !position ||
+        !Number.isSafeInteger(position.positionId) ||
+        position.positionId <= 0 ||
+        positionIds.has(position.positionId) ||
+        !Object.values(CtraderPositionStatus).some((status) => status === position.positionStatus)
+      ) {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.BROKER_SERVER_ERROR,
+          'cTrader reconciliation snapshot contains invalid or duplicate position identity.',
+        );
+      }
+      positionIds.add(position.positionId);
+    }
+    return { positions, orders: payload.order ?? [] };
   }
 
   private async reconcileAcceptedMarketFill(

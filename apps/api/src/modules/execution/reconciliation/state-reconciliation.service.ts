@@ -943,10 +943,10 @@ export class StateReconciliationService {
           internalOrders,
           agedAsOf,
           this.agedDemoCloseRecoveryCursor.get(connection.id),
-        ).filter((candidate) => !liveRecoveryAttemptedOrderIds.has(candidate.id));
+          liveRecoveryAttemptedOrderIds,
+        );
         demoCloseRecovery.aged.selected = agedCandidates.length;
-        if (agedCandidates.length === 0) this.agedDemoCloseRecoveryCursor.delete(connection.id);
-        else
+        if (agedCandidates.length > 0)
           this.agedDemoCloseRecoveryCursor.set(
             connection.id,
             agedCandidates[agedCandidates.length - 1].id,
@@ -972,12 +972,20 @@ export class StateReconciliationService {
               continue;
             }
             // Closing deals are keyed by the native position, not the entry order.
-            // Reuse the unique, ownership-bound FILLED entry proof without
-            // persisting a guessed identifier or weakening the deal predicates.
+            // Prefer durable entry evidence, otherwise ask the authenticated broker.
+            // The existing bounded aged budget also bounds these read-only lookups.
             recoveryStage = 'RECOVERY_POSITION_EVIDENCE_ERROR';
-            const verifiedPositionRef = trade.externalPositionId
+            let verifiedPositionRef = trade.externalPositionId
               ? null
               : await this.findVerifiedStoredPositionRef(trade);
+            if (!trade.externalPositionId && !verifiedPositionRef && trade.externalOrderId) {
+              const providerEntry = await adapter.getOrderById(trade.externalOrderId);
+              verifiedPositionRef = proveCtraderEntryOrderPositionRef(trade, providerEntry);
+            }
+            if (!trade.externalPositionId && !verifiedPositionRef) {
+              recordCloseRecovery('aged', 'PROVIDER_POSITION_ID_UNPROVEN');
+              continue;
+            }
             const tradeForProof = verifiedPositionRef
               ? { ...trade, externalPositionId: verifiedPositionRef }
               : trade;

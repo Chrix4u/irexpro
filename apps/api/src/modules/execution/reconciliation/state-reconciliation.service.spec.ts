@@ -502,7 +502,7 @@ describe('StateReconciliationService', () => {
               demoCloseRecovery: {
                 recent: {
                   selected: 1,
-                  outcomes: reject ? { PROVIDER_DEAL_NOT_UNIQUE: 1 } : { FILLED_WITH_PROOF: 1 },
+                  outcomes: reject ? { PROVIDER_DEAL_ABSENT: 1 } : { FILLED_WITH_PROOF: 1 },
                 },
                 aged: { selected: 0, outcomes: {} },
               },
@@ -579,7 +579,7 @@ describe('StateReconciliationService', () => {
           submittedAt: sent,
         };
         const deal = {
-          externalOrderId: distinct ? '9422910' : '8422910',
+          externalOrderId: distinct ? '9422910' : '9522910',
           instrument: 'EURUSD',
           direction: 'BUY',
           lotSize: '2.8',
@@ -611,6 +611,15 @@ describe('StateReconciliationService', () => {
         orderRepo.find.mockResolvedValueOnce([orphan]).mockResolvedValue(distinct ? [linked] : []);
         tradeRepo.find.mockResolvedValue([]);
         tradeRepo.findOne.mockResolvedValue(terminal);
+        adapter.getOrderById.mockResolvedValue({
+          providerOrderId: terminal.externalOrderId,
+          providerPositionId: '9522910',
+          status: 'FILLED',
+          instrument: terminal.instrument,
+          direction: terminal.direction,
+          filledQuantity: terminal.lotSize,
+          avgFillPrice: terminal.fillPrice,
+        });
         adapter.getClosedTrades.mockResolvedValue([deal]);
         orderService.applyFill.mockResolvedValue({ ...orphan, status: OrderStatus.FILLED });
         await service.runForConnection({
@@ -621,6 +630,8 @@ describe('StateReconciliationService', () => {
           new Date(opened.getTime() - 60_000),
           expect.any(Date),
         );
+        if (distinct) expect(adapter.getOrderById).not.toHaveBeenCalled();
+        else expect(adapter.getOrderById).toHaveBeenCalledWith(terminal.externalOrderId);
         expect(orderService.applyFill).toHaveBeenCalledTimes(1);
         expect(orderService.applyFill).toHaveBeenCalledWith(
           'aged-close-order-1',
@@ -629,7 +640,7 @@ describe('StateReconciliationService', () => {
             price: '1.43767',
             // Closing-order identity, three separate native ids from the proof.
             providerOrderId: '7695022',
-            providerPositionId: distinct ? '9422910' : '8422910',
+            providerPositionId: distinct ? '9422910' : '9522910',
             providerDealId: '6860122',
           },
           // Deal-grade delivery (native deal id present): deduplicated by the
@@ -704,6 +715,25 @@ describe('StateReconciliationService', () => {
         ...connection(),
         brokerId: 'ctrader',
       } as BrokerConnection);
+      expect(adapter.getOrderById).toHaveBeenCalledWith(terminal.externalOrderId);
+      expect(adapter.getClosedTrades).not.toHaveBeenCalled();
+      expect(orderService.applyFill).not.toHaveBeenCalled();
+
+      // A proven position still cannot authorize a mismatched closing deal.
+      adapter.getOrderById.mockResolvedValue({
+        providerOrderId: terminal.externalOrderId,
+        providerPositionId: deal.externalOrderId,
+        status: 'FILLED',
+        instrument: terminal.instrument,
+        direction: terminal.direction,
+        filledQuantity: terminal.lotSize,
+        avgFillPrice: terminal.fillPrice,
+      });
+      await service.runForConnection({
+        ...connection(),
+        brokerId: 'ctrader',
+      } as BrokerConnection);
+      expect(adapter.getClosedTrades).toHaveBeenCalled();
       expect(orderService.applyFill).not.toHaveBeenCalled();
     } finally {
       if (previous === undefined) delete process.env.VPS_FOREX_SCANNER_USER_ID;

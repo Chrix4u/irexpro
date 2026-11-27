@@ -227,3 +227,40 @@ Next: finish CI/review of diagnostics and UI, then the read-only statement compa
 - ADMIN-03: #844/#845 merged and deployed; browser-only statement arithmetic works in operator UAT. This is not broker-versus-ledger comparison or settlement evidence; account-scoped comparison remains outstanding.
 - ACC-08: Operator UAT showed generic local-economic proof rejection and historical recovery exceptions. #847 splits these into precise local-premise and exception-stage codes without altering settlement predicates. Initial stage-only candidate CI passed; latest expanded candidate requires fresh CI, guarded deployment and operator verification. No private statement rows or account IDs are included here.
 - Next: use the specific failure category to obtain authorized, account-scoped source evidence; establish root cause, test an independently reviewed remedy against synthetic regression cases, and verify unresolved counts and financial invariants. Do not infer a settlement from an arithmetic match or bulk-clear warnings. ACC-06 remains gated by provider contract validation. Do not deploy another diagnostic slice merely to accumulate features.
+
+### Closure integrity and reporting checkpoint — 2026-11-27
+
+- #849 test/docs regression merged and deployed in `b9b3d296`; #851 recorded-close presentation merged at `2f59fc74`, guarded release pending at checkpoint.
+- Reporting candidate: closed history retains all rows, but financial aggregates and outcome counts require the same complete settlement cohort (gross P&L, commission, swap, exit price and currency). Unknown all-incomplete aggregate remains null. Existing gross outcome filters and gross profit-factor convention are unchanged. Added mocked-query regression and disposable PostgreSQL test; fresh CI and guarded release review required. No financial writes or trading control changes.
+- P0 ACC-09: independently review #850 snapshot validation across shared reader consumers, especially close/SL/TP paths; distinguish uncertain provider position status from proven terminal closure. Do not treat absence alone as full close evidence.
+- P0 ACC-10: authorized account-scoped close provenance review; correlate opening/closing native IDs, dispatch audit and provider execution time, distinguish local observation versus broker execution; produce historical correction proposal for independent accounting review. Actual records remain unverified. No raw private IDs in public repository.
+- P0 ACC-11: prove complete lifecycle with synthetic and authorized DEMO evidence; verify no duplicate fills, no artificial warning clearance, no missing fees treated as zero, accurate timestamps and broker history agreement. Do not certify LIVE from CI alone.
+- Resume: verify reporting CI, review #850 independently, and obtain original internal audit evidence for the premature closure incident. Do not widen timestamp tolerances as a substitute for proof.
+
+
+### Consolidated reconciliation candidate — 2026-11-27
+
+- Integrate the source changes from #850, #852–#856 into a single review candidate based on main. Reporting changes retain the stacked #852–#854 implementation; adapter changes were checked against unchanged main file blobs; #855/#856 contain their CI formatting corrections.
+- Individual reporting browser checks and prior #850/#852 CI passed; #855/#856 rerun and integrated CI remain pending. Require whole-candidate API build, tests, PostgreSQL integration, browser checks, review and guarded deployment before release.
+- ACC-02/ACC-04 remain open. No historical records have been corrected by this integration. Native broker evidence, close-time provenance, historical deal completeness (#841/#848), and protective-order causality remain outstanding. Do not replay uncertain orders or change LIVE authorization.
+- Next: review integrated CI, address failures, validate authorized read-only broker evidence and release prerequisites. No deployment or runtime mutation from this candidate.
+
+
+### Outcome-filter consistency follow-up
+
+- #857 passed all applicable checks; #858/#859 passed their narrower triggered checks. Apply the same stored-field completeness predicate to WIN/LOSS/FLAT report filters as to the financial summary, while ALL retains unresolved rows. Preserve gross P&L classification rather than silently switching to net outcomes. Add SQL fixture and query-level regressions for incomplete winning, losing, flat and blank-currency records.
+- Recheck combined API/DB/UI CI on this review candidate. Historical financial evidence and guarded release authorization remain outstanding; no runtime or broker mutation.
+
+
+### Integrated candidate verification checkpoint
+
+- Original #857 revision `6d392368` passed all 20 executed checks, including required CI, PostgreSQL, API build and nine browser viewports. #858 and #860 passed their narrower checks, not full combined API/DB verification.
+- Incorporate the disjoint #858 diagnostic split and #860 outcome-filter/blank-currency correction into #857 itself. Require a fresh exact-head main-target CI run; do not treat prior green checks as evidence for the new revision.
+- Keep #859/#841 history-boundary change separate until the authenticated read-only DEMO contract is established. No historical settlement has been proven or repaired by this integration. Independent review, release gate and quiescence remain required.
+
+
+### Native identity recovery checkpoint
+
+- Aged DEMO recovery previously lacked the authenticated entry-order fallback already used by the recent settlement path. #861 adds the bounded read-only fallback, explicit unresolved-identity outcome and order-details account/order validation. Regression tests distinguish stored linkage, distinct broker-returned position ID and missing evidence; mismatch continues to fail closed.
+- Retarget #861 to main for full integrated CI, preserving #857 as the prior independently green candidate. Do not merge both independently. #841/#859 remain separate pending authenticated history-boundary evidence.
+- Source changes do not establish provider availability, settle historical records or authorize execution. Require exact-revision CI and independent review, then operator-gated deployment and account-scoped evidence.
