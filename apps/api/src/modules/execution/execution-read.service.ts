@@ -135,7 +135,7 @@ function ratio(grossProfit: string, grossLoss: string): number | null {
 }
 
 function currencySummary(row: ClosedTradeAggregateRow): ClosedTradeCurrencySummary | null {
-  if (!row.accountCurrency) return null;
+  if (!row.accountCurrency?.trim()) return null;
   const totalTrades = Number(row.totalTrades) || 0;
   const pnlTradeCount = Number(row.pnlTradeCount) || 0;
   const wins = Number(row.wins) || 0;
