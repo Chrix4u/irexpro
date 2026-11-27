@@ -135,11 +135,18 @@ describe('Pepperstone DEMO CLOSED trade with unsettled closing order', () => {
     }
   });
   it('never infers a provider fill from a missing or duplicate deal', () => {
-    expect(prove({ providerClosedDeals: [] }).matched).toBe(false);
-    expect(prove({ providerClosedDeals: [deal, deal] }).matched).toBe(false);
-    expect(
-      prove({ providerClosedDeals: [{ ...deal, externalOrderId: 'different' }] }).matched,
-    ).toBe(false);
+    expect(prove({ providerClosedDeals: [] })).toEqual({
+      matched: false,
+      reason: 'PROVIDER_DEAL_ABSENT',
+    });
+    expect(prove({ providerClosedDeals: [deal, deal] })).toEqual({
+      matched: false,
+      reason: 'PROVIDER_DEAL_MULTIPLE',
+    });
+    expect(prove({ providerClosedDeals: [{ ...deal, externalOrderId: 'different' }] })).toEqual({
+      matched: false,
+      reason: 'PROVIDER_DEAL_ABSENT',
+    });
   });
   it('does not accept side, instrument, lot, price or gross-profit mismatch', () => {
     for (const wrong of [

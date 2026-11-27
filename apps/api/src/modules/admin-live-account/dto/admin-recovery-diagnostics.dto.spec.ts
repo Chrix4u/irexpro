@@ -27,6 +27,19 @@ describe('admin recovery diagnostics projection', () => {
     expect(JSON.stringify(output)).not.toContain('not-for-response');
   });
 
+  it('retains separate missing and multiple deal outcomes with legacy compatibility', () => {
+    const aged = {
+      selected: 3,
+      outcomes: {
+        PROVIDER_DEAL_NOT_UNIQUE: 1,
+        PROVIDER_DEAL_ABSENT: 1,
+        PROVIDER_DEAL_MULTIPLE: 1,
+      },
+    };
+    const output = toAdminRecoveryDiagnostics(run({ demoCloseRecovery: { recent: empty, aged } }));
+    expect(output?.diagnostics).toEqual({ recent: empty, aged });
+  });
+
   it('reports historical stage errors without exposing provider messages', () => {
     const aged = {
       selected: 2,
