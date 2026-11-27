@@ -251,6 +251,11 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify V2 reliability-gate contract (P1-3) corpus, RL-1 refusals and extraction seams
+        run: node --test apps/api/scripts/research/v2-reliability-gate-contract.test.cjs
+        env:
+          NODE_ENV: test
+
   build:
     name: Build
     runs-on: ubuntu-24.04
