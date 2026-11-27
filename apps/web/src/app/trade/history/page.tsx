@@ -197,12 +197,15 @@ function pnlTone(
 }
 
 function TradePnl({ trade }: { trade: TradeExecutionView }) {
-  const tone = pnlTone(trade.realisedPnl);
+  const currencyMissing = !trade.accountCurrency?.trim();
+  const tone = currencyMissing ? 'neutral' : pnlTone(trade.realisedPnl);
   return (
     <strong className={`history-pnl history-pnl--${tone}`}>
-      {trade.realisedPnl == null
-        ? 'Unavailable'
-        : signedMoney(trade.realisedPnl, trade.accountCurrency)}
+      {currencyMissing
+        ? 'Currency unavailable'
+        : trade.realisedPnl == null
+          ? 'Unavailable'
+          : signedMoney(trade.realisedPnl, trade.accountCurrency)}
     </strong>
   );
 }
@@ -877,10 +880,10 @@ export default function ClosedTradeHistoryPage() {
                             <TradePnl trade={trade} />
                           </td>
                           <td>
-                            {money(trade.commission, trade.accountCurrency)}
+                            {trade.accountCurrency?.trim() ? money(trade.commission, trade.accountCurrency) : '—'}
                           </td>
                           <td>
-                            {signedMoney(trade.swap, trade.accountCurrency)}
+                            {trade.accountCurrency?.trim() ? signedMoney(trade.swap, trade.accountCurrency) : '—'}
                           </td>
                           <td className="history-table__reason">
                             {labelize(trade.closeReason)}

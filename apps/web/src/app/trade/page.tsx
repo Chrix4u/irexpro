@@ -1276,7 +1276,8 @@ function PositionTable({
 function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
   const notSubmitted = trade.executionReasonCode === "EXECUTION_NOT_SUBMITTED";
   const settlementPending = hasPendingClosedTradeSettlement(trade);
-  const realized = trade.status === "CLOSED" ? trade.realisedPnl : null;
+  const currencyMissing = !trade.accountCurrency?.trim();
+  const realized = trade.status === "CLOSED" && !currencyMissing ? trade.realisedPnl : null;
   const executionReason = executionReasonLabel(trade.executionReasonCode);
   const { diagnostics: pathDiagnostics, unavailable: pathUnavailable } = closedTradePathPresentation(trade);
   return (
@@ -1319,11 +1320,13 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
           <strong>{trade.exitPrice ?? "—"}</strong>
         </div>
         <div>
-          <span>Realized P&amp;L</span>
+          <span>Gross realized P&amp;L</span>
           <strong>
-            {trade.realisedPnl === null
-              ? settlementPending ? "Awaiting broker" : "—"
-              : money(trade.realisedPnl, trade.accountCurrency)}
+            {currencyMissing
+              ? "Currency unavailable"
+              : trade.realisedPnl === null
+                ? settlementPending ? "Awaiting broker" : "—"
+                : money(trade.realisedPnl, trade.accountCurrency)}
           </strong>
         </div>
         {pathDiagnostics || pathUnavailable ? (
@@ -1356,11 +1359,11 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
         ) : null}
         <div>
           <span>Total commission (entry + exit)</span>
-          <strong>{money(trade.commission, trade.accountCurrency)}</strong>
+          <strong>{currencyMissing ? "—" : money(trade.commission, trade.accountCurrency)}</strong>
         </div>
         <div>
           <span>Swap</span>
-          <strong>{money(trade.swap, trade.accountCurrency)}</strong>
+          <strong>{currencyMissing ? "—" : money(trade.swap, trade.accountCurrency)}</strong>
         </div>
         <div>
           <span>Stop loss</span>
@@ -1371,7 +1374,7 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
           <strong>{trade.takeProfit}</strong>
         </div>
         <div>
-          <span>Closed by</span>
+          <span>Recorded close reason</span>
           <strong>
             {trade.closeReason ? trade.closeReason.replaceAll("_", " ") : "—"}
           </strong>
