@@ -173,6 +173,15 @@ jobs:
 
       - name: Verify active-DEMO M1 timing audit scope and fail-closed behavior
         run: node --test apps/api/scripts/audit-planb-m1-timing-counterfactual.test.cjs
+
+      - name: Verify offline M1 evidence provenance and coverage
+        run: node --test apps/api/scripts/research/m1-decision-evidence-coverage.test.cjs
+
+      - name: Verify offline M1 abstention margin measurements
+        run: node --test apps/api/scripts/research/m1-abstention-margin.test.cjs
+
+      - name: Verify offline historical M1 feature completeness
+        run: node --test apps/api/scripts/research/m1-feature-coverage.test.cjs
         env:
           NODE_ENV: test
 
