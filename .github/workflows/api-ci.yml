@@ -246,6 +246,11 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify V2 engine component map phase 2 (P1-0.5) Python core, orchestration and data edges
+        run: node --test apps/api/scripts/research/v2-engine-component-map-phase2.test.cjs
+        env:
+          NODE_ENV: test
+
       - name: Verify V2 exit-intelligence contract (P1-5) six-engine EI-1 unification
         run: node --test apps/api/scripts/research/v2-exit-intelligence-contract.test.cjs
         env:
