@@ -509,7 +509,7 @@ export default function ClosedTradeHistoryPage() {
               </select>
             </label>
             <label>
-              <span>Outcome</span>
+              <span>Gross P&amp;L outcome</span>
               <select
                 className="input"
                 value={draft.outcome}
@@ -520,10 +520,10 @@ export default function ClosedTradeHistoryPage() {
                   }))
                 }
               >
-                <option value="ALL">All outcomes</option>
-                <option value="WIN">Profit only</option>
-                <option value="LOSS">Loss only</option>
-                <option value="FLAT">Flat only</option>
+                <option value="ALL">All records (including pending)</option>
+                <option value="WIN">Gross profit — complete fields</option>
+                <option value="LOSS">Gross loss — complete fields</option>
+                <option value="FLAT">Gross flat — complete fields</option>
               </select>
             </label>
             <label>

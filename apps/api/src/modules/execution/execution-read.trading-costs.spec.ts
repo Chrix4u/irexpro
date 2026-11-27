@@ -106,6 +106,45 @@ describe('ExecutionReadService trading-cost accounting', () => {
     expect(summary.expectancyPerTrade).toBe('137.20');
   });
 
+  it.each(['WIN', 'LOSS', 'FLAT', 'ALL'])(
+    'applies the complete-settlement predicate consistently for %s',
+    async (outcome) => {
+      const pageQuery = {
+        orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+      };
+      const summaryQuery = {
+        select: jest.fn().mockReturnThis(),
+        addSelect: jest.fn().mockReturnThis(),
+        groupBy: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getRawMany: jest.fn().mockResolvedValue([]),
+      };
+      const baseQuery = {
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        clone: jest.fn().mockReturnValueOnce(pageQuery).mockReturnValueOnce(summaryQuery),
+      };
+      const repo = {
+        createQueryBuilder: jest.fn().mockReturnValue(baseQuery),
+      } as unknown as Repository<Trade>;
+      await new ExecutionReadService(repo).listClosedTradeReport(USER_ID, { outcome });
+      const predicate = summaryQuery.addSelect.mock.calls.find(
+        ([, alias]) => alias === 'pnlTradeCount',
+      )?.[0];
+      expect(predicate).toEqual(expect.stringContaining('COUNT(*) FILTER (WHERE '));
+      const complete = predicate.slice('COUNT(*) FILTER (WHERE '.length, -1);
+      if (outcome === 'ALL') {
+        expect(baseQuery.andWhere).not.toHaveBeenCalledWith(complete);
+      } else {
+        expect(baseQuery.andWhere).toHaveBeenCalledWith(complete);
+      }
+    },
+  );
+
   it('reports unknown financial totals if every closed record is incomplete', async () => {
     const pageQuery = {
       orderBy: jest.fn().mockReturnThis(),

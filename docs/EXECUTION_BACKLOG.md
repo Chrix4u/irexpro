@@ -244,3 +244,9 @@ Next: finish CI/review of diagnostics and UI, then the read-only statement compa
 - Individual reporting browser checks and prior #850/#852 CI passed; #855/#856 rerun and integrated CI remain pending. Require whole-candidate API build, tests, PostgreSQL integration, browser checks, review and guarded deployment before release.
 - ACC-02/ACC-04 remain open. No historical records have been corrected by this integration. Native broker evidence, close-time provenance, historical deal completeness (#841/#848), and protective-order causality remain outstanding. Do not replay uncertain orders or change LIVE authorization.
 - Next: review integrated CI, address failures, validate authorized read-only broker evidence and release prerequisites. No deployment or runtime mutation from this candidate.
+
+
+### Outcome-filter consistency follow-up
+
+- #857 passed all applicable checks; #858/#859 passed their narrower triggered checks. Apply the same stored-field completeness predicate to WIN/LOSS/FLAT report filters as to the financial summary, while ALL retains unresolved rows. Preserve gross P&L classification rather than silently switching to net outcomes. Add SQL fixture and query-level regressions for incomplete winning, losing, flat and blank-currency records.
+- Recheck combined API/DB/UI CI on this review candidate. Historical financial evidence and guarded release authorization remain outstanding; no runtime or broker mutation.
