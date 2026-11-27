@@ -841,7 +841,7 @@ export class StateReconciliationService {
             const verifiedPositionRef = trade.externalPositionId
               ? null
               : await this.findVerifiedStoredPositionRef(trade);
-            const tradeForProof = verifiedPositionRef
+            let tradeForProof = verifiedPositionRef
               ? { ...trade, externalPositionId: verifiedPositionRef }
               : trade;
             if (
@@ -860,6 +860,45 @@ export class StateReconciliationService {
               new Date(Math.max(0, trade.openedAt.getTime() - 60_000)),
               asOf,
             );
+            // Settlement evidence and attribution of a particular close order
+            // are separate. Use the existing NULL-only settlement proof.
+            // Preserve the original close timestamp and strict order proof.
+            recoveryStage = 'RECOVERY_SETTLEMENT_BACKFILL_ERROR';
+            if (
+              tradeForProof.externalPositionId &&
+              agedTradeNeedsSettlementBackfill(tradeForProof)
+            ) {
+              const backfilled = await this.resolution.backfillClosedDemoSettlement({
+                trade: tradeForProof,
+                brokerId: connection.brokerId,
+                accountType: String(connection.accountType).toUpperCase(),
+                providerDeals,
+                observedAt: asOf,
+              });
+              if (backfilled) {
+                const refreshed = await this.tradeRepo.findOne({
+                  where: {
+                    id: trade.id,
+                    userId: connection.userId,
+                    brokerConnectionId: connection.id,
+                    status: TradeStatus.CLOSED,
+                  },
+                });
+                if (
+                  !refreshed ||
+                  refreshed.externalOrderId !== trade.externalOrderId ||
+                  (refreshed.externalPositionId &&
+                    refreshed.externalPositionId !== tradeForProof.externalPositionId)
+                ) {
+                  recordCloseRecovery('recent', 'PROVIDER_POSITION_ID_UNPROVEN');
+                  continue;
+                }
+                tradeForProof = {
+                  ...refreshed,
+                  externalPositionId: tradeForProof.externalPositionId,
+                };
+              }
+            }
             recoveryStage = 'RECOVERY_PROOF_EVALUATION_ERROR';
             const proof = provePepperstoneDemoClosedOrderFill({
               brokerId: connection.brokerId,

@@ -274,6 +274,7 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
   private readonly spotQuoteFlights = new Map<string, Promise<CtraderSpotEventPayload>>();
   // Display only; no trading/quote consumer reads this cache.
   private readonly displayQuotes = new Map<string, CtraderSpotEventPayload>();
+  private readonly displayQuoteAttempts = new Map<string, number>();
   private currentAccountId: string | null = null;
   /**
    * Unique lease-owner key for the client's account-session refcounting
@@ -346,6 +347,7 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         previousSession.accessToken !== accessToken
       ) {
         this.displayQuotes.clear();
+        this.displayQuoteAttempts.clear();
       }
       this.sessions.set(accountId, session);
       this.currentAccountId = accountId;
@@ -382,6 +384,7 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
   private async releaseAllContextSessions(): Promise<void> {
     this.sessions.clear();
     this.displayQuotes.clear();
+    this.displayQuoteAttempts.clear();
     this.currentAccountId = null;
     await this.client.releaseOwnerSessions(this.sessionOwnerKey);
   }
@@ -507,6 +510,34 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       if (positions.length === 0) return [];
       const pnls = await this.fetchUnrealizedPnl(session);
       const observedAt = new Date();
+      // Display must not depend on another consumer having warmed its quote
+      // cache. Request at most one stale/missing symbol per refresh, using
+      // the existing account-scoped single flight. Do not await spot here:
+      // independently measured P&L must remain available during a quote timeout.
+      const now = observedAt.getTime();
+      const quoteKeys = [...new Set(positions.map((position) => position.tradeData.symbolId))]
+        .map((symbolId) => ({
+          symbolId,
+          key: `${session.env}:${session.accountId}:${symbolId}`,
+        }))
+        .filter(({ key }) => {
+          const timestamp = Number(this.displayQuotes.get(key)?.timestamp);
+          return (
+            (!Number.isFinite(timestamp) || now - timestamp > 15_000) &&
+            !this.spotQuoteFlights.has(key) &&
+            now - (this.displayQuoteAttempts.get(key) ?? 0) >= 15_000
+          );
+        })
+        .sort(
+          (left, right) =>
+            (this.displayQuoteAttempts.get(left.key) ?? 0) -
+            (this.displayQuoteAttempts.get(right.key) ?? 0),
+        );
+      const refresh = quoteKeys[0];
+      if (refresh) {
+        this.displayQuoteAttempts.set(refresh.key, now);
+        void this.fetchSpotQuote(session, refresh.symbolId).catch(() => undefined);
+      }
       const byPosition = new Map<number, number>();
       const duplicates = new Set<number>();
       for (const entry of pnls.entries) {
