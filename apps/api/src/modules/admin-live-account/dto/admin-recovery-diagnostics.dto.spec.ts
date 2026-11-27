@@ -27,6 +27,15 @@ describe('admin recovery diagnostics projection', () => {
     expect(JSON.stringify(output)).not.toContain('not-for-response');
   });
 
+  it('reports historical stage errors without exposing provider messages', () => {
+    const aged = {
+      selected: 2,
+      outcomes: { RECOVERY_PROVIDER_HISTORY_ERROR: 1, RECOVERY_FILL_ACCOUNTING_ERROR: 1 },
+    };
+    const output = toAdminRecoveryDiagnostics(run({ demoCloseRecovery: { recent: empty, aged } }));
+    expect(output?.diagnostics).toEqual({ recent: empty, aged });
+  });
+
   it.each([
     { selected: 2, outcomes: { FILLED_WITH_PROOF: 1 } },
     { selected: 1, outcomes: { unknown: 1 } },

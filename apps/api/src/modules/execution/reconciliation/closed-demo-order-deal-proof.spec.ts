@@ -117,6 +117,23 @@ describe('Pepperstone DEMO CLOSED trade with unsettled closing order', () => {
     expect(prove({ order: { ...order, avgFillPrice: '1.4' } }).matched).toBe(false);
     expect(prove({ order: { ...order, providerOrderId: '991' } }).matched).toBe(false);
   });
+  it('identifies the exact failed local premise and never proves the fill', () => {
+    const cases: Array<[Partial<typeof input>, string]> = [
+      [{ order: { ...order, requestedQuantity: 'bad' } }, 'CLOSE_REQUEST_QUANTITY_INVALID'],
+      [{ order: { ...order, filledQuantity: 'bad' } }, 'CLOSE_FILLED_QUANTITY_INVALID'],
+      [{ trade: { ...trade, lotSize: 'bad' } }, 'CLOSE_TRADE_LOT_SIZE_INVALID'],
+      [{ trade: { ...trade, exitPrice: null } }, 'CLOSE_TRADE_EXIT_PRICE_INVALID'],
+      [{ trade: { ...trade, realisedPnl: null } }, 'CLOSE_TRADE_GROSS_PNL_INVALID'],
+      [{ order: { ...order, requestedQuantity: '0' } }, 'CLOSE_REQUEST_QUANTITY_NONPOSITIVE'],
+      [{ order: { ...order, filledQuantity: '0.1' } }, 'CLOSE_FILL_ALREADY_RECORDED'],
+      [{ order: { ...order, avgFillPrice: '1.4' } }, 'CLOSE_AVERAGE_FILL_PRICE_PRESENT'],
+      [{ trade: { ...trade, lotSize: '2.9' } }, 'CLOSE_QUANTITY_LOT_MISMATCH'],
+      [{ trade: { ...trade, exitPrice: '0' } }, 'CLOSE_TRADE_EXIT_PRICE_NONPOSITIVE'],
+    ];
+    for (const [changes, reason] of cases) {
+      expect(prove(changes)).toEqual({ matched: false, reason });
+    }
+  });
   it('never infers a provider fill from a missing or duplicate deal', () => {
     expect(prove({ providerClosedDeals: [] }).matched).toBe(false);
     expect(prove({ providerClosedDeals: [deal, deal] }).matched).toBe(false);
