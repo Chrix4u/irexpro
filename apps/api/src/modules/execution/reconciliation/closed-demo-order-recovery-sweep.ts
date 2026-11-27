@@ -47,7 +47,12 @@ export function selectAgedDemoCloseRecoveryCandidates<
     | 'submittedAt'
     | 'createdAt'
   >,
->(orders: readonly T[], asOf: Date, afterId: string | undefined): T[] {
+>(
+  orders: readonly T[],
+  asOf: Date,
+  afterId: string | undefined,
+  alreadyAttempted: ReadonlySet<string> = new Set<string>(),
+): T[] {
   const now = asOf.getTime();
   if (!Number.isFinite(now)) return [];
   const counts = new Map<string, number>();
@@ -59,9 +64,12 @@ export function selectAgedDemoCloseRecoveryCandidates<
     )
       counts.set(o.tradeId, (counts.get(o.tradeId) ?? 0) + 1);
   }
+  // Count ambiguity across every pending order first. Exclude recent
+  // attempts only from scheduling, before taking the bounded batch.
   const eligible = orders
     .filter(
       (o) =>
+        !alreadyAttempted.has(o.id) &&
         !!o.tradeId &&
         counts.get(o.tradeId) === 1 &&
         o.status === OrderStatus.RECONCILIATION_PENDING &&
