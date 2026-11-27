@@ -65,9 +65,25 @@ production runtime.
   `SCORER_INPUT_OUT_OF_RANGE`); confidence prohibited as an input; one
   correction to component map §1 (the momentum `?? 0` default lives in S2,
   not S3).
-- [ ] **P1-2** Reversal-definition unification spec (A2) with a frozen test
+- [x] **P1-2** Reversal-definition unification spec (A2) with a frozen test
   corpus of borderline bars where the six definitions disagree today.
-  Acceptance: disagreement corpus committed as synthetic fixtures.
+  Delivered → `AI_ENGINE_V2_P1_2_REVERSAL_DEFINITION_UNIFICATION_SPEC_20261127.md`
+  + executable mirror
+  `apps/api/scripts/research/v2-reversal-definition-contract.cjs` (+ test, CI
+  step). Acceptance: disagreement corpus committed as synthetic fixtures.
+  Verified: twelve frozen records (`RV-D01`..`RV-D12`), verdicts **computed**
+  by faithful predicate mirrors of all six definitions and reconciled
+  against committed expectations on every run — 11 disagreement records + 1
+  all-reject control (the near-miss corridor), confirmation counts
+  R1=5/R2=4/R3=7/R4=5/R5=4/R6=1, 12 distinct verdict+reason patterns;
+  six-definition inventory pinned with line references (incl. R2's two
+  inline ceilings l.150-151 and the R5/R6 ladders); the unified contract
+  **RD-1** (19 columns, five pre-registered gate slots — turn, impulse,
+  conviction ≥ DS-1's calibrated probability, net economics floor, regime
+  support set — with the failed breakout retired to a recorded stratifier);
+  typed refusals `REVERSAL_INPUT_REQUIRED`, `REVERSAL_UNSUPPORTED_INSTRUMENT`,
+  `REVERSAL_INPUT_OUT_OF_RANGE`; tampering with inputs, expectations, records
+  or definitions is a typed refusal.
 - [ ] **P1-3** Reliability-layer consolidation spec (A3) — one service,
   shared floors, explicit sample-count ladders.
 - [ ] **P1-4** Calibration-service consolidation spec (A4/B4) including the
