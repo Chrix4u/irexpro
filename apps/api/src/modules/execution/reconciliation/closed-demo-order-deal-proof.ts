@@ -157,12 +157,9 @@ function proveDemoClosedOrderFillCore(
     gross = trade.realisedPnl;
   // Report the first failed local premise without changing the proof,
   // revealing financial values, or accepting weaker evidence.
-  if (typeof qty !== 'string' || !decimal.test(qty))
-    return no('CLOSE_REQUEST_QUANTITY_INVALID');
-  if (typeof fill !== 'string' || !decimal.test(fill))
-    return no('CLOSE_FILLED_QUANTITY_INVALID');
-  if (typeof lots !== 'string' || !decimal.test(lots))
-    return no('CLOSE_TRADE_LOT_SIZE_INVALID');
+  if (typeof qty !== 'string' || !decimal.test(qty)) return no('CLOSE_REQUEST_QUANTITY_INVALID');
+  if (typeof fill !== 'string' || !decimal.test(fill)) return no('CLOSE_FILLED_QUANTITY_INVALID');
+  if (typeof lots !== 'string' || !decimal.test(lots)) return no('CLOSE_TRADE_LOT_SIZE_INVALID');
   if (typeof price !== 'string' || !decimal.test(price))
     return no('CLOSE_TRADE_EXIT_PRICE_INVALID');
   if (gross === null || gross === undefined || !/^-?\d+(?:\.\d+)?$/.test(gross))
