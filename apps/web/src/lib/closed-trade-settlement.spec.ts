@@ -1,4 +1,4 @@
-import { hasPendingClosedTradeSettlement, missingClosedTradeSettlementFields } from './closed-trade-settlement';
+import { closedTradeCurrencyCoverage, hasPendingClosedTradeSettlement, missingClosedTradeSettlementFields } from './closed-trade-settlement';
 
 const complete = {
   status: 'CLOSED',
@@ -6,6 +6,7 @@ const complete = {
   realisedPnl: '12.04',
   commission: '-10.32',
   swap: '0',
+  accountCurrency: 'USD',
 };
 
 describe('broker-closed positions with pending financial settlement', () => {
@@ -55,5 +56,34 @@ describe('missingClosedTradeSettlementFields', () => {
       status: 'OPEN',
       exitPrice: null,
     })).toEqual([]);
+  });
+});
+
+describe('closed trade currency breakdown coverage', () => {
+  it('does not display zero monetary totals for an entirely incomplete currency', () => {
+    expect(closedTradeCurrencyCoverage({ pnlTradeCount: 0, totalTrades: 2 }))
+      .toEqual({ hasKnownTotals: false, label: '0 of 2 records with complete settlement fields' });
+  });
+
+  it('shows totals for a separate complete currency and a partial cohort', () => {
+    expect(closedTradeCurrencyCoverage({ pnlTradeCount: 1, totalTrades: 1 }).hasKnownTotals).toBe(true);
+    expect(closedTradeCurrencyCoverage({ pnlTradeCount: 1, totalTrades: 3 }))
+      .toEqual({ hasKnownTotals: true, label: '1 of 3 records with complete settlement fields' });
+  });
+});
+
+describe('currency-bound settlement fields', () => {
+  it.each([null, '', '   '])('flags absent currency (%p) even when all amounts exist', (accountCurrency) => {
+    const trade = {...complete, accountCurrency};
+    expect(hasPendingClosedTradeSettlement(trade)).toBe(true);
+    expect(missingClosedTradeSettlementFields(trade)).toEqual(['account currency']);
+  });
+
+  it('does not flag currency-bound zero P&L, commission and swap', () => {
+    expect(hasPendingClosedTradeSettlement({...complete, realisedPnl: '0', commission: '0', swap: '0'})).toBe(false);
+  });
+
+  it('does not treat an open record as an incomplete closed settlement', () => {
+    expect(missingClosedTradeSettlementFields({...complete, status: 'OPEN', accountCurrency: null})).toEqual([]);
   });
 });

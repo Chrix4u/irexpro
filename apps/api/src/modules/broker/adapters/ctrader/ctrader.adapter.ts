@@ -1930,14 +1930,42 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       ctidTraderAccountId: parseCtraderId(session.accountId, 'ctidTraderAccountId'),
       returnProtectionOrders: false,
     });
-    const payload = expectCtraderPayload<{ position?: CtraderPosition[]; order?: CtraderOrder[] }>(
-      response,
-      CTRADER_PAYLOAD_TYPE.RECONCILE_RES,
-    );
-    return {
-      positions: Array.isArray(payload.position) ? payload.position : [],
-      orders: Array.isArray(payload.order) ? payload.order : [],
-    };
+    const payload = expectCtraderPayload<{
+      ctidTraderAccountId: number;
+      position?: CtraderPosition[];
+      order?: CtraderOrder[];
+    }>(response, CTRADER_PAYLOAD_TYPE.RECONCILE_RES);
+    // The response account is required by the provider contract. An omitted
+    // repeated field denotes an empty list, but a malformed list is not
+    // evidence that the account has no open positions or working orders.
+    if (
+      payload.ctidTraderAccountId !== parseCtraderId(session.accountId, 'ctidTraderAccountId') ||
+      (payload.position !== undefined && !Array.isArray(payload.position)) ||
+      (payload.order !== undefined && !Array.isArray(payload.order))
+    ) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.BROKER_SERVER_ERROR,
+        'cTrader reconciliation snapshot account or list structure is invalid.',
+      );
+    }
+    const positions = payload.position ?? [];
+    const positionIds = new Set<number>();
+    for (const position of positions) {
+      if (
+        !position ||
+        !Number.isSafeInteger(position.positionId) ||
+        position.positionId <= 0 ||
+        positionIds.has(position.positionId) ||
+        !Object.values(CtraderPositionStatus).some((status) => status === position.positionStatus)
+      ) {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.BROKER_SERVER_ERROR,
+          'cTrader reconciliation snapshot contains invalid or duplicate position identity.',
+        );
+      }
+      positionIds.add(position.positionId);
+    }
+    return { positions, orders: payload.order ?? [] };
   }
 
   private async reconcileAcceptedMarketFill(

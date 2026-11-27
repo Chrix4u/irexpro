@@ -227,3 +227,20 @@ Next: finish CI/review of diagnostics and UI, then the read-only statement compa
 - ADMIN-03: #844/#845 merged and deployed; browser-only statement arithmetic works in operator UAT. This is not broker-versus-ledger comparison or settlement evidence; account-scoped comparison remains outstanding.
 - ACC-08: Operator UAT showed generic local-economic proof rejection and historical recovery exceptions. #847 splits these into precise local-premise and exception-stage codes without altering settlement predicates. Initial stage-only candidate CI passed; latest expanded candidate requires fresh CI, guarded deployment and operator verification. No private statement rows or account IDs are included here.
 - Next: use the specific failure category to obtain authorized, account-scoped source evidence; establish root cause, test an independently reviewed remedy against synthetic regression cases, and verify unresolved counts and financial invariants. Do not infer a settlement from an arithmetic match or bulk-clear warnings. ACC-06 remains gated by provider contract validation. Do not deploy another diagnostic slice merely to accumulate features.
+
+### Closure integrity and reporting checkpoint — 2026-11-27
+
+- #849 test/docs regression merged and deployed in `b9b3d296`; #851 recorded-close presentation merged at `2f59fc74`, guarded release pending at checkpoint.
+- Reporting candidate: closed history retains all rows, but financial aggregates and outcome counts require the same complete settlement cohort (gross P&L, commission, swap, exit price and currency). Unknown all-incomplete aggregate remains null. Existing gross outcome filters and gross profit-factor convention are unchanged. Added mocked-query regression and disposable PostgreSQL test; fresh CI and guarded release review required. No financial writes or trading control changes.
+- P0 ACC-09: independently review #850 snapshot validation across shared reader consumers, especially close/SL/TP paths; distinguish uncertain provider position status from proven terminal closure. Do not treat absence alone as full close evidence.
+- P0 ACC-10: authorized account-scoped close provenance review; correlate opening/closing native IDs, dispatch audit and provider execution time, distinguish local observation versus broker execution; produce historical correction proposal for independent accounting review. Actual records remain unverified. No raw private IDs in public repository.
+- P0 ACC-11: prove complete lifecycle with synthetic and authorized DEMO evidence; verify no duplicate fills, no artificial warning clearance, no missing fees treated as zero, accurate timestamps and broker history agreement. Do not certify LIVE from CI alone.
+- Resume: verify reporting CI, review #850 independently, and obtain original internal audit evidence for the premature closure incident. Do not widen timestamp tolerances as a substitute for proof.
+
+
+### Consolidated reconciliation candidate — 2026-11-27
+
+- Integrate the source changes from #850, #852–#856 into a single review candidate based on main. Reporting changes retain the stacked #852–#854 implementation; adapter changes were checked against unchanged main file blobs; #855/#856 contain their CI formatting corrections.
+- Individual reporting browser checks and prior #850/#852 CI passed; #855/#856 rerun and integrated CI remain pending. Require whole-candidate API build, tests, PostgreSQL integration, browser checks, review and guarded deployment before release.
+- ACC-02/ACC-04 remain open. No historical records have been corrected by this integration. Native broker evidence, close-time provenance, historical deal completeness (#841/#848), and protective-order causality remain outstanding. Do not replay uncertain orders or change LIVE authorization.
+- Next: review integrated CI, address failures, validate authorized read-only broker evidence and release prerequisites. No deployment or runtime mutation from this candidate.

@@ -206,6 +206,28 @@ describe('selectAgedDemoCloseRecoveryCandidates', () => {
     expect(third).toEqual([...ids.slice(4), ...ids.slice(0, 1)]);
   });
 
+  it('does not let recent attempts exhaust the historical recovery budget', () => {
+    const orders = ['a', 'b', 'c', 'd', 'e'].map((id) =>
+      stranded(id, `t-${id}`, new Date('2026-11-10T06:00:00Z')),
+    );
+    const attempted = new Set(['a', 'b']);
+    expect(
+      selectAgedDemoCloseRecoveryCandidates(orders, now, undefined, attempted).map((o) => o.id),
+    ).toEqual(['c', 'd']);
+    expect(
+      selectAgedDemoCloseRecoveryCandidates(orders, now, 'd', attempted).map((o) => o.id),
+    ).toEqual(['e', 'c']);
+  });
+
+  it('preserves ambiguity checks even when one competing order was attempted', () => {
+    const a = stranded('a', 't1', new Date('2026-11-10T06:00:00Z'));
+    const b = stranded('b', 't1', new Date('2026-11-10T06:30:00Z'));
+    const c = stranded('c', 't2', new Date('2026-11-10T07:00:00Z'));
+    expect(
+      selectAgedDemoCloseRecoveryCandidates([a, b, c], now, undefined, new Set(['a'])),
+    ).toEqual([c]);
+  });
+
   it('bounds the batch to the documented budget', () => {
     expect(AGED_DEMO_CLOSE_RECOVERY_BATCH).toBe(2);
     const many = Array.from({ length: 60 }, (_, i) =>
