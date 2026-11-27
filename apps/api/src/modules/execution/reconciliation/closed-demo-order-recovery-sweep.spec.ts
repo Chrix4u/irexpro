@@ -223,9 +223,9 @@ describe('selectAgedDemoCloseRecoveryCandidates', () => {
     const a = stranded('a', 't1', new Date('2026-11-10T06:00:00Z'));
     const b = stranded('b', 't1', new Date('2026-11-10T06:30:00Z'));
     const c = stranded('c', 't2', new Date('2026-11-10T07:00:00Z'));
-    expect(selectAgedDemoCloseRecoveryCandidates([a, b, c], now, undefined, new Set(['a']))).toEqual([
-      c,
-    ]);
+    expect(
+      selectAgedDemoCloseRecoveryCandidates([a, b, c], now, undefined, new Set(['a'])),
+    ).toEqual([c]);
   });
 
   it('bounds the batch to the documented budget', () => {
