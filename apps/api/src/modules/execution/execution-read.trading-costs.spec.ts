@@ -59,21 +59,21 @@ describe('ExecutionReadService trading-cost accounting', () => {
     };
 
     expect(summaryQuery.addSelect).toHaveBeenCalledWith(
-      expect.stringContaining('SUM(trade.realisedPnl)'),
+      expect.stringContaining('SUM("trade"."realised_pnl")'),
       'grossRealisedPnl',
     );
     expect(summaryQuery.addSelect).toHaveBeenCalledWith(
-      expect.stringMatching(/SUM\(ABS\(trade\.commission\)\)/),
+      expect.stringMatching(/SUM\(ABS\("trade"\."commission"\)\)/),
       'totalCommission',
     );
     expect(summaryQuery.addSelect).toHaveBeenCalledWith(
       expect.stringMatching(
-        /SUM\(trade\.realisedPnl\).*SUM\(ABS\(trade\.commission\)\).*SUM\(trade\.swap\)/,
+        /SUM\("trade"\."realised_pnl"\).*SUM\(ABS\("trade"\."commission"\)\).*SUM\("trade"\."swap"\)/,
       ),
       'netRealisedPnl',
     );
     expect(summaryQuery.addSelect).toHaveBeenCalledWith(
-      expect.stringMatching(/SUM\(ABS\(trade\.commission\)\).*SUM\(trade\.swap\)/),
+      expect.stringMatching(/SUM\(ABS\("trade"\."commission"\)\).*SUM\("trade"\."swap"\)/),
       'totalExplicitCosts',
     );
 
@@ -81,8 +81,8 @@ describe('ExecutionReadService trading-cost accounting', () => {
     // Otherwise a NULL commission or swap is silently treated as zero.
     for (const [expression, alias] of summaryQuery.addSelect.mock.calls) {
       if (alias === 'totalTrades') continue;
-      for (const field of ['realisedPnl', 'commission', 'swap', 'exitPrice', 'accountCurrency']) {
-        expect(expression).toContain(`trade.${field} IS NOT NULL`);
+      for (const field of ['realised_pnl', 'commission', 'swap', 'exit_price', 'account_currency']) {
+        expect(expression).toContain(`"trade"."${field}" IS NOT NULL`);
       }
     }
     expect(summaryQuery.addSelect).toHaveBeenCalledWith(
