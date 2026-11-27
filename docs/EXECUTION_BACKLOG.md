@@ -257,3 +257,10 @@ Next: finish CI/review of diagnostics and UI, then the read-only statement compa
 - Original #857 revision `6d392368` passed all 20 executed checks, including required CI, PostgreSQL, API build and nine browser viewports. #858 and #860 passed their narrower checks, not full combined API/DB verification.
 - Incorporate the disjoint #858 diagnostic split and #860 outcome-filter/blank-currency correction into #857 itself. Require a fresh exact-head main-target CI run; do not treat prior green checks as evidence for the new revision.
 - Keep #859/#841 history-boundary change separate until the authenticated read-only DEMO contract is established. No historical settlement has been proven or repaired by this integration. Independent review, release gate and quiescence remain required.
+
+
+### Native identity recovery checkpoint
+
+- Aged DEMO recovery previously lacked the authenticated entry-order fallback already used by the recent settlement path. #861 adds the bounded read-only fallback, explicit unresolved-identity outcome and order-details account/order validation. Regression tests distinguish stored linkage, distinct broker-returned position ID and missing evidence; mismatch continues to fail closed.
+- Retarget #861 to main for full integrated CI, preserving #857 as the prior independently green candidate. Do not merge both independently. #841/#859 remain separate pending authenticated history-boundary evidence.
+- Source changes do not establish provider availability, settle historical records or authorize execution. Require exact-revision CI and independent review, then operator-gated deployment and account-scoped evidence.
