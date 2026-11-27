@@ -303,3 +303,12 @@ Next: finish CI/review of diagnostics and UI, then the read-only statement compa
 - [ ] Rehearse a new installation on a disposable clean Linux environment using only the release artifact, generated customer credentials and new database; test health, login, admin, demo broker integration with authorized test credentials and rollback. Do not include production environment files, account history, private evidence or personal data.
 - [ ] Move live services to a single stable runtime entry path only after coordinated quiescence and compatible rollback validation; keep one active and one verified rollback. Remove old source checkouts and release directories only after recovery proof and preservation of legitimate work. Existing hosting configuration and persistent data must remain intact.
 - [ ] Produce a customer handover checklist and versioned release manifest; separately authorize source-code transfer under the applicable contract, never hand over a copy of the production server.
+
+
+### Extended storage cleanup checkpoint
+
+- [x] Expanded recursive project-name inventory across authorized hosting, development, research, root, optional runtime, runner and temporary locations; kept restricted inventory and deletion manifests on the server.
+- [x] Verified removal of 117 additional recoverable registered worktrees and four clean standalone duplicate repositories, with all 121 paths confirmed absent. GitHub ref/ancestry proofs and allocated-byte measurements retained in restricted operational logs. No database or active runtime deletion.
+- [x] Rechecked website, API liveness/readiness and database/backup job status after cleanup. Full authenticated acceptance, broker lifecycle and restoration still require evidence.
+- [x] Added docs/CUSTOMER_HANDOVER.md to define portable single-source release and fresh-install acceptance requirements.
+- [ ] Remaining registered worktrees include unreviewed tracked/untracked/ignored content and unproven remote reachability; preserve unique source and secure sensitive material before removal. Complete the remaining independent-clone, artifact and release retention review. Do not describe directory consolidation or portable customer installation as complete until acceptance passes.
