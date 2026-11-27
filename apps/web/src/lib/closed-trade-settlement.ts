@@ -32,3 +32,14 @@ export function missingClosedTradeSettlementFields(trade: ClosedTradeSettlementF
   ];
   return fields.filter(([key]) => trade[key] === null).map(([, label]) => label);
 }
+
+/** Distinguish an empty financial cohort from a genuine zero-valued settlement. */
+export function closedTradeCurrencyCoverage(group: {
+  pnlTradeCount: number;
+  totalTrades: number;
+}): { hasKnownTotals: boolean; label: string } {
+  return {
+    hasKnownTotals: group.pnlTradeCount > 0,
+    label: group.pnlTradeCount + ' of ' + group.totalTrades + ' records with complete settlement fields',
+  };
+}

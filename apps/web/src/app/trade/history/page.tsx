@@ -21,7 +21,7 @@ import {
 import { useAuth } from '@/context/auth-context';
 import { mapApiError } from '@/lib/error-mapping';
 import { loadClosedTradeReport } from '@/lib/trader-execution';
-import { hasPendingClosedTradeSettlement } from '@/lib/closed-trade-settlement';
+import { closedTradeCurrencyCoverage, hasPendingClosedTradeSettlement } from '@/lib/closed-trade-settlement';
 import './history.css';
 
 type FilterState = {
@@ -575,8 +575,8 @@ export default function ClosedTradeHistoryPage() {
               <Alert variant="warning">
                 {summary.unresolvedPnlCount} closed trade
                 {summary.unresolvedPnlCount === 1 ? '' : 's'} in this result do
-                not have complete currency-bound realized P&amp;L yet. Money
-                totals show only authoritative currency-bound values.
+                not have complete currency-bound settlement fields yet. Money
+                totals cover only records with complete settlement fields.
               </Alert>
             ) : null}
 
@@ -665,9 +665,16 @@ export default function ClosedTradeHistoryPage() {
                   </span>
                 </div>
                 <div className="history-currency-breakdown__grid">
-                  {summary.currencyBreakdown.map((item) => (
-                    <article key={item.accountCurrency}>
-                      <b>{item.accountCurrency}</b>
+                  {summary.currencyBreakdown.map((item) => {
+                    const coverage = closedTradeCurrencyCoverage(item);
+                    return (
+                      <article key={item.accountCurrency}>
+                        <b>{item.accountCurrency}</b>
+                        <span>{coverage.label}</span>
+                        {!coverage.hasKnownTotals ? (
+                          <span>Financial totals unavailable — settlement pending</span>
+                        ) : (
+                          <>
                       <span>
                         Profit{' '}
                         {signedMoney(item.grossProfit, item.accountCurrency)}
@@ -690,8 +697,11 @@ export default function ClosedTradeHistoryPage() {
                         Net after costs{' '}
                         {signedMoney(item.netRealisedPnl, item.accountCurrency)}
                       </span>
-                    </article>
-                  ))}
+                          </>
+                        )}
+                      </article>
+                    );
+                  })}
                 </div>
               </section>
             )}
