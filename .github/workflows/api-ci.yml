@@ -259,6 +259,19 @@ jobs:
         env:
           NODE_ENV: test
 
+  v2-redundant-code-inventory:
+    name: V2 redundant-code inventory (P1-6)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: apps/api/.nvmrc
+      - name: Run redundant-code inventory tests
+        run: node --test apps/api/scripts/research/v2-redundant-code-inventory.test.cjs
+        env:
+          NODE_ENV: test
+
   build:
     name: Build
     runs-on: ubuntu-24.04
