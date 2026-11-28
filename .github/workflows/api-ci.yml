@@ -246,6 +246,19 @@ jobs:
         env:
           NODE_ENV: test
 
+  v2-exit-intelligence-contract:
+    name: V2 exit-intelligence contract (P1-5)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: apps/api/.nvmrc
+      - name: Run exit-intelligence contract tests
+        run: node --test apps/api/scripts/research/v2-exit-intelligence-contract.test.cjs
+        env:
+          NODE_ENV: test
+
   build:
     name: Build
     runs-on: ubuntu-24.04
