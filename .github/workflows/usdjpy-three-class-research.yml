@@ -20,10 +20,9 @@ env:
 jobs:
   research:
     name: USDJPY SHORT-NO_TRADE-LONG bounded study
+    # Runtime-only VPS policy: held until the hosted artifact replacement is verified.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'main')
+      false && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'))
     concurrency:
       group: irexpro-usdjpy-three-class
       cancel-in-progress: false
