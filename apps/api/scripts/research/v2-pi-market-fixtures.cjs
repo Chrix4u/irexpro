@@ -22,6 +22,7 @@
  */
 
 const { mulberry32, T0_EPOCH_SECONDS } = require('./v2-synthetic-market.cjs');
+const { normalQuantile } = require('./v2-offline-evaluation-harness.cjs');
 const {
   SUPPORTED_SYMBOLS,
   SYMBOL_SPECS,
@@ -32,9 +33,6 @@ const {
 const PI_SCENARIOS = Object.freeze([
   'PI_NULL', 'PI_PLANTED_CONTINUATION', 'PI_TREND_REGIMES', 'PI_REVERSION',
 ]);
-
-/** Standard-normal quantile at 0.56 (planted continuation default). */
-const Z_AT_056 = 0.1510;
 
 const PLANTED_REGIME_DRIFT = Object.freeze({
   TREND_UP: 0.06, TREND_DOWN: -0.06, RANGE: 0.0, HIGH_VOL: 0.005,
@@ -60,11 +58,10 @@ function generateSymbolM1({ symbol, seed, nBars, scenario, plantedContinuationPr
   const spec = SYMBOL_SPECS[symbol];
   const rng = mulberry32(seed);
   const sigmaM1 = (spec.dailyVolPercent / 100) / Math.sqrt(1440);
-  const sigma12 = Math.sqrt(12) * sigmaM1;
-  const zPlanted = plantedContinuationProb >= 0.5
-    ? Z_AT_056 + (plantedContinuationProb - 0.56) * 6.18 : Z_AT_056;
-  const mu12 = zPlanted * sigma12;
-  const driftPerBar = mu12 / 12;
+  const zPlanted = normalQuantile(plantedContinuationProb);
+  const sigma60 = Math.sqrt(60) * sigmaM1;
+  const mu60 = zPlanted * sigma60;
+  const driftPerBar = mu60 / 60;
   const logPrice0 = Math.log(spec.startPrice);
   let logPrice = logPrice0;
   const bars = [];
@@ -82,15 +79,19 @@ function generateSymbolM1({ symbol, seed, nBars, scenario, plantedContinuationPr
     let drift = 0;
     let volMult = 1;
     if (scenario === 'PI_PLANTED_CONTINUATION') {
-      if (edgeRemaining === 0 && i >= 12) {
-        // Trigger uses only PAST bars (no future peek).
-        const mom = returns.slice(-12).reduce((s, r) => s + r, 0);
+      if (edgeRemaining === 0 && i >= 60) {
+        // Trigger uses only PAST bars (no future peek): a strong, calm
+        // 60-minute run (the M5 decision-grid lookback) plants a
+        // 60-minute continuation drift so that P(continuation over the
+        // label horizon | trigger) equals the planted probability.
+        const past60 = returns.slice(-60);
+        const mom = past60.reduce((s, r) => s + r, 0);
         let vol2 = 0;
-        for (const r of returns.slice(-12)) vol2 += r * r;
-        const vol = Math.sqrt(vol2 / 12);
-        if (Math.abs(mom) > 0.9 * sigma12 && vol < 1.1 * sigmaM1) {
+        for (const r of past60) vol2 += r * r;
+        const vol = Math.sqrt(vol2 / 60);
+        if (Math.abs(mom) > 0.9 * sigma60 && vol < 1.1 * sigmaM1) {
           edgeDir = mom > 0 ? 1 : -1;
-          edgeRemaining = 12;
+          edgeRemaining = 60;
           triggers.push({ bar: i, dir: edgeDir, t });
         }
       }
@@ -199,10 +200,11 @@ function generatePiFixture(config) {
 
 /**
  * Empirical planted-edge check (acceptance for PI-2): on the planted
- * fixture, measure the realized continuation rate at trigger bars — the
- * fraction of trigger events whose following 12-M1-bar move continues the
- * trigger direction. On PI_NULL this returns the null rate (~0.5) using
- * all sampled bars as triggers, proving zero planted edge.
+ * fixture, measure the realized continuation rate at trigger bars over
+ * the 60-minute label horizon (12 M5 bars) — the fraction of trigger
+ * events whose following 60-minute move continues the trigger
+ * direction. On PI_NULL this returns the null rate (~0.5) using sampled
+ * bars, proving zero planted edge.
  */
 function measureContinuationRate(fixture, symbol, { sampleEvery = 12 } = {}) {
   const sym = fixture.series[symbol];
@@ -210,6 +212,8 @@ function measureContinuationRate(fixture, symbol, { sampleEvery = 12 } = {}) {
     throw new Error(`PI_FIXTURE_SYMBOL_MISSING:${String(symbol)}`);
   }
   const bars = sym.M1.bars;
+  const HORIZON = 60; // label horizon in M1 bars (12 M5 bars)
+  const LOOKBACK = 60;
   const isPlanted = fixture.scenario === 'PI_PLANTED_CONTINUATION';
   const triggerSet = new Set(
     isPlanted ? sym.groundTruth.triggers.map((t) => t.bar) : [],
@@ -217,12 +221,13 @@ function measureContinuationRate(fixture, symbol, { sampleEvery = 12 } = {}) {
   let matched = 0;
   let total = 0;
   const step = isPlanted ? 1 : sampleEvery;
-  for (let i = 0; i + 12 < bars.length; i += step) {
+  for (let i = 0; i + HORIZON < bars.length; i += step) {
     if (isPlanted && !triggerSet.has(i)) continue;
+    const pastIdx = Math.max(0, i - LOOKBACK);
     const triggerDir = isPlanted
       ? sym.groundTruth.triggers.find((t) => t.bar === i).dir
-      : (Math.log(bars[i].close) - Math.log(bars[Math.max(0, i - 12)].close) > 0 ? 1 : -1);
-    const fwd = Math.log(bars[i + 12].close) - Math.log(bars[i].close);
+      : (Math.log(bars[i].close) - Math.log(bars[pastIdx].close) > 0 ? 1 : -1);
+    const fwd = Math.log(bars[i + HORIZON].close) - Math.log(bars[i].close);
     if (Math.sign(fwd) === triggerDir) matched += 1;
     total += 1;
   }

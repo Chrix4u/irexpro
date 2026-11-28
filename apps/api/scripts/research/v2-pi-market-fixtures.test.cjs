@@ -66,10 +66,10 @@ test('PI_PLANTED_CONTINUATION edge is empirically recoverable near the planted l
   const r = measureContinuationRate(fx, 'EURUSD');
   assert.ok(r.total > 200, `triggers=${r.total}`);
   assert.ok(Math.abs(r.rate - 0.56) < 0.04, `rate=${r.rate}`);
-  // Triggers are strictly non-overlapping windows (one-to-one structure).
+  // Triggers are strictly non-overlapping label-horizon windows.
   const trig = fx.series.EURUSD.groundTruth.triggers;
   for (let i = 1; i < trig.length; i += 1) {
-    assert.ok(trig[i].bar - trig[i - 1].bar >= 12, 'trigger windows overlap');
+    assert.ok(trig[i].bar - trig[i - 1].bar >= 60, 'trigger windows overlap');
   }
   assert.strictEqual(fx.plantedContinuationProb, 0.56);
 });
