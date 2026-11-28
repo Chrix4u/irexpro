@@ -16,12 +16,16 @@ const {
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..', '..');
 
-test('the statement fixture is committed byte-identical to the upload', () => {
+test('the fixture is LF-normalized with the upload hash recorded as provenance', () => {
   const fixture = path.join(repoRoot, 'apps/api/scripts/research', EVIDENCE_FILE);
   assert.ok(fs.existsSync(fixture));
-  const text = fs.readFileSync(fixture, 'utf8');
-  assert.strictEqual(text.split('\n').length, 30);
-  assert.ok(text.startsWith('Deals'));
+  const raw = fs.readFileSync(fixture, 'utf8');
+  assert.strictEqual(raw.includes('\r'), false, 'fixture must be LF-normalized');
+  assert.strictEqual(raw.split('\n').length, 30);
+  assert.ok(raw.startsWith('Deals'));
+  const { EVIDENCE_PROVENANCE } = require('./v2-broker-evidence-window.cjs');
+  assert.match(EVIDENCE_PROVENANCE.originalUploadSha256, /^[0-9a-f]{64}$/);
+  assert.ok(EVIDENCE_PROVENANCE.normalization.startsWith('CRLF -> LF'));
 });
 
 test('the window parses to exactly 19 deals on 2026-11-10', () => {

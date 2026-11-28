@@ -1061,7 +1061,9 @@
       "source": "operator upload statement-09_44 28.11.2026.csv (2026-11-28)",
       "window": "2026-11-10 00:24:39 UTC .. 13:30:01 UTC",
       "accountBalanceAtExport": 42404.16,
-      "note": "byte-identical fixture copy; deals section covers only the 10 Nov 2026 window while the summary block reflects the account state at the 28 Nov 2026 export."
+      "originalUploadSha256": "174980af474cbc2f2a27eb937bc3ba00955b7d36765094de37a8b7cec895b261",
+      "normalization": "CRLF -> LF line endings only (commit house convention); all deal values unchanged",
+      "note": "deals section covers only the 10 Nov 2026 window while the summary block reflects the account state at the 28 Nov 2026 export."
     },
     "file": "fixtures/v2-broker-evidence-statement-09-20261110.csv",
     "dealCount": 19,

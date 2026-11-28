@@ -22,9 +22,15 @@ const EVIDENCE_PROVENANCE = Object.freeze({
   source: 'operator upload statement-09_44 28.11.2026.csv (2026-11-28)',
   window: '2026-11-10 00:24:39 UTC .. 13:30:01 UTC',
   accountBalanceAtExport: 42404.16,
-  note: 'byte-identical fixture copy; deals section covers only the ' +
-    '10 Nov 2026 window while the summary block reflects the account ' +
-    'state at the 28 Nov 2026 export.',
+  // SHA-256 of the operator upload AS RECEIVED (CRLF line endings,
+  // broker-native format). The committed fixture is line-ending
+  // normalized to LF per house convention; content is otherwise
+  // byte-identical.
+  originalUploadSha256: '174980af474cbc2f2a27eb937bc3ba00955b7d36765094de37a8b7cec895b261',
+  normalization: 'CRLF -> LF line endings only (commit house convention); ' +
+    'all deal values unchanged',
+  note: 'deals section covers only the 10 Nov 2026 window while the ' +
+    'summary block reflects the account state at the 28 Nov 2026 export.',
 });
 
 /** Pip size and quote currency conversion per instrument. */
