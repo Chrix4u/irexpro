@@ -72,6 +72,8 @@ jobs:
           pnpm --filter @irexpro/web test --runInBand
       - name: Assemble and smoke-test Node runtime candidates
         run: bash scripts/deployment/package-node-runtime-candidate.sh "$CANDIDATE_SHA" "$RUNNER_TEMP/irexpro-node-runtime"
+      - name: Verify candidate on target-compatible AlmaLinux 9
+        run: bash scripts/deployment/verify-node-runtime-almalinux.sh "$RUNNER_TEMP/irexpro-node-runtime"
       - name: Retain hosted Node runtime candidates
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
