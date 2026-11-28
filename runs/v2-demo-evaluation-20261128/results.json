@@ -1063,6 +1063,7 @@
       "accountBalanceAtExport": 42404.16,
       "originalUploadSha256": "174980af474cbc2f2a27eb937bc3ba00955b7d36765094de37a8b7cec895b261",
       "normalization": "CRLF -> LF line endings only (commit house convention); all deal values unchanged",
+      "sanitization": "broker deal and order identifiers replaced with deterministic synthetic sequence IDs (DID-S#####, ORD-S#####); every economic field (symbol, direction, timestamps, prices, quantity, net USD, balance USD, summary block) is byte-identical to the operator upload; the real-to-synthetic identifier mapping is retained offline by the operator and is never committed (see AI_ENGINE_V2_SENSITIVE_DATA_REMEDIATION_20261128.md)",
       "note": "deals section covers only the 10 Nov 2026 window while the summary block reflects the account state at the 28 Nov 2026 export."
     },
     "file": "fixtures/v2-broker-evidence-statement-09-20261110.csv",
@@ -1083,13 +1084,13 @@
       "duplicateDealIds": false
     },
     "splitSecondPair": [
-      "DID332349465",
-      "DID332349467"
+      "DID-S00001",
+      "DID-S00002"
     ],
     "deals": [
       {
-        "dealId": "DID332349465",
-        "orderId": "375137041",
+        "dealId": "DID-S00001",
+        "orderId": "ORD-S00001",
         "symbol": "EURUSD",
         "direction": "Buy",
         "openedAt": "10 Nov 2026 00:24:39.639",
@@ -1101,8 +1102,8 @@
         "balanceUsd": 49999.93
       },
       {
-        "dealId": "DID332349467",
-        "orderId": "375137043",
+        "dealId": "DID-S00002",
+        "orderId": "ORD-S00002",
         "symbol": "EURUSD",
         "direction": "Buy",
         "openedAt": "10 Nov 2026 00:24:39.639",
@@ -1114,8 +1115,8 @@
         "balanceUsd": 49999.86
       },
       {
-        "dealId": "DID332350221",
-        "orderId": "375137264",
+        "dealId": "DID-S00003",
+        "orderId": "ORD-S00003",
         "symbol": "USDJPY",
         "direction": "Buy",
         "openedAt": "10 Nov 2026 00:26:36.760",
@@ -1127,8 +1128,8 @@
         "balanceUsd": 49869.54
       },
       {
-        "dealId": "DID332361230",
-        "orderId": "375150551",
+        "dealId": "DID-S00004",
+        "orderId": "ORD-S00004",
         "symbol": "AUDUSD",
         "direction": "Buy",
         "openedAt": "10 Nov 2026 02:05:21.684",
@@ -1140,8 +1141,8 @@
         "balanceUsd": 49817.54
       },
       {
-        "dealId": "DID332363350",
-        "orderId": "375148676",
+        "dealId": "DID-S00005",
+        "orderId": "ORD-S00005",
         "symbol": "USDJPY",
         "direction": "Sell",
         "openedAt": "10 Nov 2026 01:58:22.269",
@@ -1153,8 +1154,8 @@
         "balanceUsd": 49677.16
       },
       {
-        "dealId": "DID332378653",
-        "orderId": "375168712",
+        "dealId": "DID-S00006",
+        "orderId": "ORD-S00006",
         "symbol": "USDJPY",
         "direction": "Sell",
         "openedAt": "10 Nov 2026 05:19:29.404",
@@ -1166,8 +1167,8 @@
         "balanceUsd": 49511.41
       },
       {
-        "dealId": "DID332381619",
-        "orderId": "375151181",
+        "dealId": "DID-S00007",
+        "orderId": "ORD-S00007",
         "symbol": "USDCHF",
         "direction": "Sell",
         "openedAt": "10 Nov 2026 02:21:31.558",
@@ -1179,8 +1180,8 @@
         "balanceUsd": 49892.82
       },
       {
-        "dealId": "DID332384684",
-        "orderId": "375175660",
+        "dealId": "DID-S00008",
+        "orderId": "ORD-S00008",
         "symbol": "AUDUSD",
         "direction": "Buy",
         "openedAt": "10 Nov 2026 06:17:19.039",
@@ -1192,8 +1193,8 @@
         "balanceUsd": 49676.82
       },
       {
-        "dealId": "DID332385701",
-        "orderId": "375176333",
+        "dealId": "DID-S00009",
+        "orderId": "ORD-S00009",
         "symbol": "USDCHF",
         "direction": "Sell",
         "openedAt": "10 Nov 2026 06:26:31.511",
@@ -1205,8 +1206,8 @@
         "balanceUsd": 50024.34
       },
       {
-        "dealId": "DID332389344",
-        "orderId": "375182200",
+        "dealId": "DID-S00010",
+        "orderId": "ORD-S00010",
         "symbol": "USDJPY",
         "direction": "Sell",
         "openedAt": "10 Nov 2026 07:17:44.328",
@@ -1218,8 +1219,8 @@
         "balanceUsd": 49876.29
       },
       {
-        "dealId": "DID332391272",
-        "orderId": "375183841",
+        "dealId": "DID-S00011",
+        "orderId": "ORD-S00011",
         "symbol": "GBPUSD",
         "direction": "Buy",
         "openedAt": "10 Nov 2026 07:33:26.137",
@@ -1231,8 +1232,8 @@
         "balanceUsd": 49636.29
       },
       {
-        "dealId": "DID332395800",
-        "orderId": "375186223",
+        "dealId": "DID-S00012",
+        "orderId": "ORD-S00012",
         "symbol": "AUDUSD",
         "direction": "Sell",
         "openedAt": "10 Nov 2026 07:56:27.989",
@@ -1244,8 +1245,8 @@
         "balanceUsd": 49416.29
       },
       {
-        "dealId": "DID332396188",
-        "orderId": "375191847",
+        "dealId": "DID-S00013",
+        "orderId": "ORD-S00013",
         "symbol": "GBPUSD",
         "direction": "Buy",
         "openedAt": "10 Nov 2026 08:36:23.444",
@@ -1257,8 +1258,8 @@
         "balanceUsd": 49324.29
       },
       {
-        "dealId": "DID332396774",
-        "orderId": "375186240",
+        "dealId": "DID-S00014",
+        "orderId": "ORD-S00014",
         "symbol": "EURUSD",
         "direction": "Buy",
         "openedAt": "10 Nov 2026 07:56:43.939",
@@ -1270,8 +1271,8 @@
         "balanceUsd": 49612.29
       },
       {
-        "dealId": "DID332398140",
-        "orderId": "375190692",
+        "dealId": "DID-S00015",
+        "orderId": "ORD-S00015",
         "symbol": "USDCHF",
         "direction": "Sell",
         "openedAt": "10 Nov 2026 08:29:29.880",
@@ -1283,8 +1284,8 @@
         "balanceUsd": 49280.49
       },
       {
-        "dealId": "DID332421231",
-        "orderId": "375218494",
+        "dealId": "DID-S00016",
+        "orderId": "ORD-S00016",
         "symbol": "GBPUSD",
         "direction": "Sell",
         "openedAt": "10 Nov 2026 10:27:14.302",
@@ -1296,8 +1297,8 @@
         "balanceUsd": 49116.49
       },
       {
-        "dealId": "DID332423898",
-        "orderId": "375221283",
+        "dealId": "DID-S00017",
+        "orderId": "ORD-S00017",
         "symbol": "USDCHF",
         "direction": "Buy",
         "openedAt": "10 Nov 2026 10:32:20.465",
@@ -1309,8 +1310,8 @@
         "balanceUsd": 48897.51
       },
       {
-        "dealId": "DID332476893",
-        "orderId": "375201948",
+        "dealId": "DID-S00018",
+        "orderId": "ORD-S00018",
         "symbol": "AUDUSD",
         "direction": "Sell",
         "openedAt": "10 Nov 2026 09:30:28.729",
@@ -1322,8 +1323,8 @@
         "balanceUsd": 49185.51
       },
       {
-        "dealId": "DID332515315",
-        "orderId": "375288533",
+        "dealId": "DID-S00019",
+        "orderId": "ORD-S00019",
         "symbol": "AUDUSD",
         "direction": "Sell",
         "openedAt": "10 Nov 2026 12:42:19.003",

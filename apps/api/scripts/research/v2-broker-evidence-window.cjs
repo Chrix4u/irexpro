@@ -1,10 +1,12 @@
 'use strict';
 /**
  * V2 Champion broker-confirmed evidence window (P4-0 documented-evidence
- * slice). Parses the operator-uploaded Pepperstone statement extract
- * (`statement-09_44 28.11.2026.csv`, byte-identical fixture copy) and
- * computes the V1 champion's REAL performance statistics for the
- * 2026-11-10 deal window.
+ * slice). Parses the sanitized Pepperstone statement fixture derived from
+ * the operator upload (`statement-09_44 28.11.2026.csv`) and computes the
+ * V1 champion's REAL performance statistics for the 2026-11-10 deal
+ * window. Broker deal/order identifiers are replaced with synthetic
+ * sequence IDs; all economic values are broker-confirmed and unchanged
+ * (sanitization record: AI_ENGINE_V2_SENSITIVE_DATA_REMEDIATION_20261128.md).
  *
  * This is the ONLY real (broker-confirmed) performance data in the V2
  * track. It is a descriptive evidence record — never a profitability
@@ -24,11 +26,17 @@ const EVIDENCE_PROVENANCE = Object.freeze({
   accountBalanceAtExport: 42404.16,
   // SHA-256 of the operator upload AS RECEIVED (CRLF line endings,
   // broker-native format). The committed fixture is line-ending
-  // normalized to LF per house convention; content is otherwise
-  // byte-identical.
+  // normalized to LF and identifier-sanitized per house convention;
+  // economic content is otherwise byte-identical.
   originalUploadSha256: '174980af474cbc2f2a27eb937bc3ba00955b7d36765094de37a8b7cec895b261',
   normalization: 'CRLF -> LF line endings only (commit house convention); ' +
     'all deal values unchanged',
+  sanitization: 'broker deal and order identifiers replaced with deterministic ' +
+    'synthetic sequence IDs (DID-S#####, ORD-S#####); every economic field ' +
+    '(symbol, direction, timestamps, prices, quantity, net USD, balance USD, ' +
+    'summary block) is byte-identical to the operator upload; the real-to-' +
+    'synthetic identifier mapping is retained offline by the operator and is ' +
+    'never committed (see AI_ENGINE_V2_SENSITIVE_DATA_REMEDIATION_20261128.md)',
   note: 'deals section covers only the 10 Nov 2026 window while the ' +
     'summary block reflects the account state at the 28 Nov 2026 export.',
 });

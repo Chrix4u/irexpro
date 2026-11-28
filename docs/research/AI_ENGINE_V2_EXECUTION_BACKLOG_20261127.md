@@ -193,7 +193,10 @@ predicate mirrors — plus the complete offline evaluation stack:
 - [x] **E-7** V1 broker-confirmed evidence window →
   `v2-broker-evidence-window.cjs` + committed statement fixture.
   Acceptance: four-way reconciliation (net total, balance chain,
-  realized match, duplicate guard) on the real statement.
+  realized match, duplicate guard) on the sanitized real statement
+  (broker identifiers replaced with synthetic sequence IDs; every economic
+  field byte-identical to the operator upload — sanitization record:
+  `AI_ENGINE_V2_SENSITIVE_DATA_REMEDIATION_20261128.md`).
 - [x] **E-8** Isolated DEMO evaluation environment for independent
   review → `v2-demo-evaluation-environment.cjs` +
   `v2-demo-evaluation-run.cjs`. Acceptance: fail-closed R1/R2/R4

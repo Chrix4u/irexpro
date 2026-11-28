@@ -1,7 +1,9 @@
 'use strict';
 /**
- * Tests for the V1 broker-confirmed evidence window (real statement data —
- * the only non-synthetic performance data in the V2 track).
+ * Tests for the V1 broker-confirmed evidence window (sanitized real
+ * statement data — the only non-synthetic performance data in the V2
+ * track; broker identifiers replaced with synthetic sequence IDs, all
+ * economic values broker-confirmed and unchanged).
  */
 
 const test = require('node:test');
@@ -16,16 +18,26 @@ const {
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..', '..');
 
-test('the fixture is LF-normalized with the upload hash recorded as provenance', () => {
+test('the fixture is LF-normalized, sanitized, with the upload hash recorded as provenance', () => {
   const fixture = path.join(repoRoot, 'apps/api/scripts/research', EVIDENCE_FILE);
   assert.ok(fs.existsSync(fixture));
   const raw = fs.readFileSync(fixture, 'utf8');
   assert.strictEqual(raw.includes('\r'), false, 'fixture must be LF-normalized');
   assert.strictEqual(raw.split('\n').length, 30);
-  assert.ok(raw.startsWith('Deals'));
+  assert.ok(raw.startsWith('Deals'))
   const { EVIDENCE_PROVENANCE } = require('./v2-broker-evidence-window.cjs');
   assert.match(EVIDENCE_PROVENANCE.originalUploadSha256, /^[0-9a-f]{64}$/);
   assert.ok(EVIDENCE_PROVENANCE.normalization.startsWith('CRLF -> LF'));
+  // Sanitization: every deal row carries synthetic identifiers only.
+  const dealRows = raw.split('\n').filter((l) => l.startsWith('DID'));
+  assert.strictEqual(dealRows.length, 19);
+  for (const row of dealRows) {
+    const cols = row.split(',');
+    assert.match(cols[0], /^DID-S\d{5}$/, `synthetic deal id: ${cols[0]}`);
+    assert.match(cols[1], /^ORD-S\d{5}$/, `synthetic order id: ${cols[1]}`);
+  }
+  assert.strictEqual(/DID3\d+/.test(raw), false, 'raw broker deal ids must not appear');
+  assert.ok(EVIDENCE_PROVENANCE.sanitization.startsWith('broker deal and order identifiers replaced'));
 });
 
 test('the window parses to exactly 19 deals on 2026-11-10', () => {
@@ -71,7 +83,7 @@ test('the window-vs-account gap is recorded, not silently reconciled', () => {
 
 test('the split-second EURUSD pair is identified (prior investigation)', () => {
   const e = loadBrokerEvidenceWindow(repoRoot);
-  assert.deepStrictEqual(e.splitSecondPair, ['DID332349465', 'DID332349467']);
+  assert.deepStrictEqual(e.splitSecondPair, ['DID-S00001', 'DID-S00002']);
   assert.strictEqual(e.deals[0].openedAt, e.deals[1].openedAt);
 });
 
