@@ -312,3 +312,12 @@ Next: finish CI/review of diagnostics and UI, then the read-only statement compa
 - [x] Rechecked website, API liveness/readiness and database/backup job status after cleanup. Full authenticated acceptance, broker lifecycle and restoration still require evidence.
 - [x] Added docs/CUSTOMER_HANDOVER.md to define portable single-source release and fresh-install acceptance requirements.
 - [ ] Remaining registered worktrees include unreviewed tracked/untracked/ignored content and unproven remote reachability; preserve unique source and secure sensitive material before removal. Complete the remaining independent-clone, artifact and release retention review. Do not describe directory consolidation or portable customer installation as complete until acceptance passes.
+
+
+### Orphaned worktree metadata and source preservation review — 2026-11-28
+
+- [x] Re-inventory remaining registered worktrees. Detect 28 broken metadata pointers, 22 of which point to directory-only shells. Verify exact remote ancestry, staged index equality and reflog commit recoverability; restore missing Git pointers for eligible empty shells only, then use Git worktree removal under shared deployment exclusion. Confirm all 22 removed paths absent; six nonempty broken worktrees remain protected.
+- [x] Compare 111 tracked/untracked worktree inventories against the verified current main tree. Only 15 entries matched exactly; none of those worktrees had every changed entry match. Do not infer that all other entries are unique or publish them without source and sensitivity review.
+- [x] Inventory two stashes and identify two clean worktrees whose commit recovery is not yet established. Retain them pending reviewed recovery; no stash drops or public upload of unreviewed research. Measure nine retained old API release directories; compatible rollback proof is still required.
+- [x] Recheck public web/API health, database service and last backup job result. Remaining authenticated, broker lifecycle and rollback acceptance unchanged.
+- [ ] Review and preserve outstanding source changes, repair remaining nonempty broken worktree metadata only after checking nested contents, and finish independent artifact/clone review. Keep the active application unchanged until artifact-based deployment and compatible rollback acceptance are complete.
