@@ -127,7 +127,7 @@ function buildPredictionOpportunities(fixture, options = {}) {
       while (m15Ptr + 1 < m15.length && m15[m15Ptr + 1].t + 900 <= decisionTimeSec) m15Ptr += 1;
       while (h1Ptr + 1 < h1.length && h1[h1Ptr + 1].t + 3600 <= decisionTimeSec) h1Ptr += 1;
       while (h4Ptr + 1 < h4.length && h4[h4Ptr + 1].t + 14400 <= decisionTimeSec) h4Ptr += 1;
-      if (m1Ptr < 11 || m15Ptr < 5 || h1Ptr < 3 || h4Ptr < 1) continue;
+      if (m1Ptr < 11 || m15Ptr < 5 || h1Ptr < 3 || h4Ptr < 3) continue;
       // --- features (closed bars only) ---
       const m1Closes = m1.slice(m1Ptr - 11, m1Ptr + 1).map((b) => b.close);
       const m1Rets = logReturnsFrom(m1Closes);
@@ -138,7 +138,7 @@ function buildPredictionOpportunities(fixture, options = {}) {
       const lo12 = Math.min(...m5Window.map((b) => b.low));
       const m15Rets = logReturnsFrom(m15.slice(m15Ptr - 5, m15Ptr + 1).map((b) => b.close));
       const h1Rets = logReturnsFrom(h1.slice(h1Ptr - 3, h1Ptr + 1).map((b) => b.close));
-      const h4Rets = logReturnsFrom(h4.slice(h4Ptr - 1, h4Ptr + 1).map((b) => b.close));
+      const h4Rets = logReturnsFrom(h4.slice(h4Ptr - 3, h4Ptr + 1).map((b) => b.close));
       const lastBar = m5[i];
       const features = {
         m1Mom: m1Rets.reduce((s, r) => s + r, 0),
