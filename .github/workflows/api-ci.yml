@@ -246,107 +246,48 @@ jobs:
         env:
           NODE_ENV: test
 
-  v2-exit-intelligence-contract:
-    name: V2 exit-intelligence contract (P1-5)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: apps/api/.nvmrc
-      - name: Run exit-intelligence contract tests
+      - name: Verify V2 exit-intelligence contract (P1-5) six-engine EI-1 unification
         run: node --test apps/api/scripts/research/v2-exit-intelligence-contract.test.cjs
         env:
           NODE_ENV: test
 
-  v2-redundant-code-inventory:
-    name: V2 redundant-code inventory (P1-6)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: apps/api/.nvmrc
-      - name: Run redundant-code inventory tests
+      - name: Verify V2 redundant-code inventory (P1-6) scan reconciliation
         run: node --test apps/api/scripts/research/v2-redundant-code-inventory.test.cjs
         env:
           NODE_ENV: test
 
-  v2-paired-engine-simulator:
-    name: V2 paired-engine simulator (P2-2)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: apps/api/.nvmrc
-      - name: Run paired-engine simulator tests
+      - name: Verify V2 synthetic market generator (P2-1) determinism and recovery
+        run: node --test apps/api/scripts/research/v2-synthetic-market.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 intelligence engine runnable policies (champion mirror + challenger)
+        run: node --test apps/api/scripts/research/v2-intelligence-engine.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 paired-engine simulator (P2-2) ledger identity and reconciliation
         run: node --test apps/api/scripts/research/v2-paired-engine-simulator.test.cjs
         env:
           NODE_ENV: test
 
-  v2-offline-evaluation-harness:
-    name: V2 offline evaluation harness (P2/P3)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: apps/api/.nvmrc
-      - name: Run evaluation harness tests
+      - name: Verify V2 offline evaluation harness (P2/P3) metric families and campaigns
         run: node --test apps/api/scripts/research/v2-offline-evaluation-harness.test.cjs
         env:
           NODE_ENV: test
 
-  v2-comparative-dashboard:
-    name: V2 comparative dashboard (R6)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: apps/api/.nvmrc
-      - name: Run dashboard tests
+      - name: Verify V2 comparative dashboard (R6) ledger projection
         run: node --test apps/api/scripts/research/v2-comparative-dashboard.test.cjs
         env:
           NODE_ENV: test
 
-  v2-broker-evidence-window:
-    name: V2 broker evidence window (real data)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: apps/api/.nvmrc
-      - name: Run broker evidence tests
+      - name: Verify V2 broker evidence window (real statement data)
         run: node --test apps/api/scripts/research/v2-broker-evidence-window.test.cjs
         env:
           NODE_ENV: test
 
-  v2-demo-evaluation-environment:
-    name: V2 demo evaluation environment (R1/R2/R4)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: apps/api/.nvmrc
-      - name: Run demo environment tests
+      - name: Verify V2 demo evaluation environment (R1/R2/R4 fail-closed)
         run: node --test apps/api/scripts/research/v2-demo-evaluation-environment.test.cjs
-        env:
-          NODE_ENV: test
-
-  v2-intelligence-engine:
-    name: V2 intelligence engine (runnable challenger + champion mirror)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: apps/api/.nvmrc
-      - name: Run intelligence engine tests
-        run: node --test apps/api/scripts/research/v2-intelligence-engine.test.cjs apps/api/scripts/research/v2-synthetic-market.test.cjs
         env:
           NODE_ENV: test
 
