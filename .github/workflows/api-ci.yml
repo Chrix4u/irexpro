@@ -216,6 +216,136 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify V2 Challenger attribution ledger is isolated and append-only
+        run: node --test apps/api/scripts/research/v2-challenger-attribution.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 statistical evaluation framework reference values
+        run: node --test apps/api/scripts/research/v2-statistical-evaluation.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 entry-exit decomposition identity and refusals
+        run: node --test apps/api/scripts/research/v2-entry-exit-decomposition.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 engine component map inventory and drift detector
+        run: node --test apps/api/scripts/research/v2-engine-component-map.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 direction-scorer contract (P1-1) inventory and DS-1 refusals
+        run: node --test apps/api/scripts/research/v2-direction-scorer-contract.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 reversal-definition contract (P1-2) corpus and RD-1 refusals
+        run: node --test apps/api/scripts/research/v2-reversal-definition-contract.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 engine component map phase 2 (P1-0.5) Python core, orchestration and data edges
+        run: node --test apps/api/scripts/research/v2-engine-component-map-phase2.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 reliability-gate contract (P1-3) corpus, RL-1 refusals and extraction seams
+        run: node --test apps/api/scripts/research/v2-reliability-gate-contract.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 calibration contract (P1-4) corpus, CAL-1 refusals and scoreboard rules
+        run: node --test apps/api/scripts/research/v2-calibration-contract.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 exit-intelligence contract (P1-5) six-engine EI-1 unification
+        run: node --test apps/api/scripts/research/v2-exit-intelligence-contract.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 redundant-code inventory (P1-6) scan reconciliation
+        run: node --test apps/api/scripts/research/v2-redundant-code-inventory.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 synthetic market generator (P2-1) determinism and recovery
+        run: node --test apps/api/scripts/research/v2-synthetic-market.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 intelligence engine runnable policies (champion mirror + challenger)
+        run: node --test apps/api/scripts/research/v2-intelligence-engine.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 paired-engine simulator (P2-2) ledger identity and reconciliation
+        run: node --test apps/api/scripts/research/v2-paired-engine-simulator.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 offline evaluation harness (P2/P3) metric families and campaigns
+        run: node --test apps/api/scripts/research/v2-offline-evaluation-harness.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 comparative dashboard (R6) ledger projection
+        run: node --test apps/api/scripts/research/v2-comparative-dashboard.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 broker evidence window (real statement data)
+        run: node --test apps/api/scripts/research/v2-broker-evidence-window.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 demo evaluation environment (R1/R2/R4 fail-closed)
+        run: node --test apps/api/scripts/research/v2-demo-evaluation-environment.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 E-10 campaign matrix, walk-forward and uncertainty refusals
+        run: node --test apps/api/scripts/research/v2-e10-campaign.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 ablation campaign truncation, turnover and cost-drag arms
+        run: node --test apps/api/scripts/research/v2-ablation-campaign.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2-G1 immutable baseline freeze (PI-0)
+        run: node --test apps/api/scripts/research/v2-baseline-freeze.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 historical data ingestion contract (PI-1)
+        run: node --test apps/api/scripts/research/v2-historical-data-contract.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 synthetic multi-symbol multi-timeframe fixtures (PI-2)
+        run: node --test apps/api/scripts/research/v2-pi-market-fixtures.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 common prediction-opportunity dataset (PI-3)
+        run: node --test apps/api/scripts/research/v2-prediction-dataset.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 predictive-intelligence candidate models (PI-4)
+        run: node --test apps/api/scripts/research/v2-pi-models.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 predictive-intelligence evaluation campaign (PI-5)
+        run: node --test apps/api/scripts/research/v2-pi-campaign.test.cjs
+        env:
+          NODE_ENV: test
+
   build:
     name: Build
     runs-on: ubuntu-24.04

@@ -1,0 +1,102 @@
+'use strict';
+/**
+ * Tests for the V1 broker-confirmed evidence window (sanitized real
+ * statement data — the only non-synthetic performance data in the V2
+ * track; broker identifiers replaced with synthetic sequence IDs, all
+ * economic values broker-confirmed and unchanged).
+ */
+
+const test = require('node:test');
+const assert = require('node:assert');
+const path = require('node:path');
+const fs = require('node:fs');
+
+const {
+  EVIDENCE_FILE,
+  loadBrokerEvidenceWindow,
+} = require('./v2-broker-evidence-window.cjs');
+
+const repoRoot = path.resolve(__dirname, '..', '..', '..', '..');
+
+test('the fixture is LF-normalized, sanitized, with the upload hash recorded as provenance', () => {
+  const fixture = path.join(repoRoot, 'apps/api/scripts/research', EVIDENCE_FILE);
+  assert.ok(fs.existsSync(fixture));
+  const raw = fs.readFileSync(fixture, 'utf8');
+  assert.strictEqual(raw.includes('\r'), false, 'fixture must be LF-normalized');
+  assert.strictEqual(raw.split('\n').length, 30);
+  assert.ok(raw.startsWith('Deals'))
+  const { EVIDENCE_PROVENANCE } = require('./v2-broker-evidence-window.cjs');
+  assert.match(EVIDENCE_PROVENANCE.originalUploadSha256, /^[0-9a-f]{64}$/);
+  assert.ok(EVIDENCE_PROVENANCE.normalization.startsWith('CRLF -> LF'));
+  // Sanitization: every deal row carries synthetic identifiers only.
+  const dealRows = raw.split('\n').filter((l) => l.startsWith('DID'));
+  assert.strictEqual(dealRows.length, 19);
+  for (const row of dealRows) {
+    const cols = row.split(',');
+    assert.match(cols[0], /^DID-S\d{5}$/, `synthetic deal id: ${cols[0]}`);
+    assert.match(cols[1], /^ORD-S\d{5}$/, `synthetic order id: ${cols[1]}`);
+  }
+  assert.strictEqual(/DID3\d+/.test(raw), false, 'raw broker deal ids must not appear');
+  assert.ok(EVIDENCE_PROVENANCE.sanitization.startsWith('broker deal and order identifiers replaced'));
+});
+
+test('the window parses to exactly 19 deals on 2026-11-10', () => {
+  const e = loadBrokerEvidenceWindow(repoRoot);
+  assert.strictEqual(e.dealCount, 19);
+  assert.ok(e.deals.every((d) => d.openedAt.startsWith('10 Nov 2026')));
+  assert.ok(e.deals.every((d) => d.lots === 0.01 || d.lots === 4));
+});
+
+test('pinned broker-confirmed totals reconcile exactly', () => {
+  const e = loadBrokerEvidenceWindow(repoRoot);
+  // Net USD of the window: broker total row == sum of deals == realized
+  // P&L in the summary block == -442.49.
+  assert.strictEqual(Math.round(e.netUsd * 100) / 100, -442.49);
+  assert.strictEqual(e.windowNetTotalRow, -442.49);
+  assert.strictEqual(e.summaryRealisedUsd, -442.49);
+  assert.strictEqual(e.wins, 5);
+  assert.strictEqual(e.losses, 14);
+  assert.strictEqual(Math.round(e.winRate * 10000) / 10000, 0.2632);
+  assert.strictEqual(Math.round(e.profitFactor * 10000) / 10000, 0.7912);
+  assert.strictEqual(Math.round(e.expectancyUsdPerTrade * 100) / 100, -23.29);
+  assert.strictEqual(e.firstBalanceUsd, 50000);
+  assert.strictEqual(e.lastBalanceUsd, 49557.51);
+  assert.strictEqual(e.summaryBalanceUsd, 42404.16);
+  assert.strictEqual(e.summaryEquityUsd, 42404.16);
+});
+
+test('all four verification checks pass on the real window', () => {
+  const e = loadBrokerEvidenceWindow(repoRoot);
+  assert.strictEqual(e.verification.netTotalMatchesDeals, true);
+  assert.strictEqual(e.verification.balanceChainContinuous, true);
+  assert.strictEqual(e.verification.realizedMatches, true);
+  assert.strictEqual(e.verification.duplicateDealIds, false);
+});
+
+test('the window-vs-account gap is recorded, not silently reconciled', () => {
+  const e = loadBrokerEvidenceWindow(repoRoot);
+  // The deals section covers only the 10 Nov window; the summary block is
+  // the account state at the 28 Nov export. The gap is documented
+  // evidence of the window-vs-account scope difference.
+  assert.strictEqual(Math.round(e.windowVsAccountGapUsd * 100) / 100, -7153.35);
+});
+
+test('the split-second EURUSD pair is identified (prior investigation)', () => {
+  const e = loadBrokerEvidenceWindow(repoRoot);
+  assert.deepStrictEqual(e.splitSecondPair, ['DID-S00001', 'DID-S00002']);
+  assert.strictEqual(e.deals[0].openedAt, e.deals[1].openedAt);
+});
+
+test('implied round-turn friction per lot is plausible and pinned', () => {
+  const e = loadBrokerEvidenceWindow(repoRoot);
+  // Median implied friction (theoretical mid P&L minus broker Net) in
+  // pips per lot across the 19 deals.
+  assert.ok(e.medianImpliedFrictionPipsPerLot > 0.3 &&
+    e.medianImpliedFrictionPipsPerLot < 1.0,
+  `median friction ${e.medianImpliedFrictionPipsPerLot}`);
+});
+
+test('malformed evidence is refused, never guessed', () => {
+  assert.throws(() => loadBrokerEvidenceWindow(repoRoot, 'does-not-exist.csv'),
+    /EVIDENCE_FILE_NOT_FOUND/);
+});

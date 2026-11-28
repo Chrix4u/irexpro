@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>iRexPro V2 Challenger — comparative evaluation dashboard</title>
+<style>
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+body { font: 14px/1.55 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  margin: 0; padding: 24px; background: #f6f7f9; color: #14171c; }
+h1 { font-size: 19px; margin: 0 0 4px; }
+h2 { font-size: 15px; margin: 28px 0 8px; border-bottom: 2px solid #d9dce1;
+  padding-bottom: 4px; }
+.banner { background: #14171c; color: #fff; padding: 8px 12px; border-radius: 6px;
+  display: inline-block; margin: 6px 6px 0 0; font-size: 12px; }
+.banner.warn { background: #8a2b13; }
+table { border-collapse: collapse; width: 100%; margin: 8px 0 16px;
+  background: #fff; font-size: 12.5px; }
+th, td { border: 1px solid #d9dce1; padding: 5px 8px; text-align: right; }
+th { background: #eceef2; text-align: left; font-weight: 600; }
+td:first-child, th:first-child { text-align: left; }
+tr.champion td { background: #f2f6fa; }
+tr.challenger td { background: #f6f2f4; }
+.pos { color: #0d6a2f; } .neg { color: #9c2b13; }
+.muted { color: #56606b; }
+.note { font-size: 12px; color: #56606b; margin: 4px 0 12px; }
+.panel { background: #fff; border: 1px solid #d9dce1; border-radius: 8px;
+  padding: 12px 16px; margin: 10px 0; }
+code { background: #eceef2; padding: 1px 4px; border-radius: 3px; }
+.spark { vertical-align: middle; }
+ul { margin: 6px 0; padding-left: 18px; }
+</style></head>
+<body>
+<h1>iRexPro AI Engine V2 — Champion–Challenger comparative evaluation</h1>
+<p class="muted">v2-demo-evaluation-run (offline evaluation harness) · research/ai-engine-v2-champion-challenger-20261127 · seed 20261128</p>
+<span class="banner">OFFLINE SIMULATION</span><span class="banner">RESEARCH-ONLY</span>
+<span class="banner warn">CHAMPION SIDE = SIMPLIFIED S1 MIRROR — NOT THE DEPLOYED V1 CHAMPION</span>
+<span class="banner warn">SYNTHETIC RESULTS ARE NOT EVIDENCE OF PROFITABILITY</span>
+<span class="banner warn">V2 NOT PROMOTED TO LIVE</span>
+
+<h2>1 · Constraint compliance and comparison semantics</h2>
+<div class="panel"><ul>
+<li>Champion side fidelity (<code>SIMPLIFIED_S1_MIRROR</code>): the paired campaign runs a RESEARCH MIRROR of S1 (9-term composite, B1 confidence, fixed stop/target geometry, fixed 0.2 lot) — NOT the complete deployed V1 Champion (M1 orchestration, six-pair routing, reliability gates, calibration layers, X1..X6 exits). All campaign deltas are mirror-relative.</li>
+<li>The only actual deployed-V1 performance datum is the broker-confirmed evidence window in section 3 (single day, descriptive only).</li>
+<li>V1 champion baseline frozen (policy mirror hash-pinned; exits are hard stop/target only).</li>
+<li>All engine identities carry execution authority <code>RESEARCH_SHADOW</code>; no order authority exists in the research stack.</li>
+<li>Execution costs calibrated to the broker evidence window (median implied friction 0.600 pips/lot); every cost is charged, never waived.</li>
+<li>Attribution ledger is append-only, duplicate-refusing; the dashboard is a read-only projection of it (R6).</li>
+</ul></div>
+
+<h2>2 · Paired campaign — seven metric families</h2>
+<table>
+<tr><th>Metric family</th><th>V1 Champion — simplified S1 mirror</th><th>V2 Challenger</th></tr>
+<tr><th>Settled trades</th><td class="champion">473</td><td class="challenger">676</td></tr><tr><th>Win rate (Wilson 95%)</th><td class="champion">36.6% [32.4%, 41.0%]</td><td class="challenger">41.0% [37.3%, 44.7%]</td></tr><tr><th>Cost-adjusted expectancy (net R/trade)</th><td class="champion">-0.246</td><td class="challenger">-0.299</td></tr><tr><th>Profit factor</th><td class="champion">0.68</td><td class="challenger">0.44</td></tr><tr><th>Total net (USD, ledger)</th><td class="champion">-1637.05</td><td class="challenger">-2947.30</td></tr><tr><th>Entry discrimination AUC (z, settled trades — exit-confounded)</th><td class="champion">0.5094 (z 0.34)</td><td class="challenger">0.5054 (z 0.24)</td></tr><tr><th>Calibration ECE / Brier</th><td class="champion">0.1816 / 0.2802</td><td class="challenger">0.1796 / 0.2797</td></tr><tr><th>Exit efficiency: mean capture</th><td class="champion">-32.7%</td><td class="challenger">26.5%</td></tr><tr><th>Profit retention (capture of MFE)</th><td class="champion">-32.7%</td><td class="challenger">26.5%</td></tr><tr><th>Mean give-back (1 − capture)</th><td class="champion">132.7%</td><td class="challenger">73.5%</td></tr><tr><th>Loss cut ratio (|realized|/|MAE|)</th><td class="champion">4.010</td><td class="challenger">2.917</td></tr><tr><th>Dominant deficit channel</th><td class="champion">COST_DRAG</td><td class="challenger">WIN_TRUNCATION</td></tr><tr><th>Loss-cut benefit (R)</th><td class="champion">19.6</td><td class="challenger">115.2</td></tr><tr><th>Drawdown: trade-level (R)</th><td class="champion">119.7</td><td class="challenger">203.0</td></tr><tr><th>Drawdown: equity (USD)</th><td class="champion">1710</td><td class="challenger">2956</td></tr>
+</table>
+<table><tr><th>Engine</th><th>Equity (mark-to-market)</th></tr><tr class="champion"><th>V1 Champion — simplified S1 mirror</th><td><svg class="spark" width="260" height="40" viewBox="0 0 260 40" role="img" aria-label="equity sparkline"><polyline points="0.0,1.0 0.9,1.0 1.7,1.0 2.6,1.0 3.5,1.0 4.3,1.0 5.2,1.0 6.0,1.0 6.9,1.0 7.8,1.0 8.6,1.1 9.5,0.4 10.4,0.8 11.2,0.5 12.1,0.5 13.0,0.2 13.8,0.6 14.7,0.9 15.5,1.3 16.4,1.1 17.3,1.3 18.1,2.3 19.0,2.2 19.9,2.0 20.7,2.4 21.6,2.3 22.5,2.8 23.3,2.9 24.2,2.9 25.0,3.5 25.9,4.1 26.8,4.2 27.6,4.2 28.5,5.7 29.4,5.8 30.2,5.7 31.1,7.1 32.0,7.5 32.8,7.5 33.7,8.1 34.6,8.6 35.4,8.7 36.3,9.0 37.1,9.1 38.0,9.0 38.9,9.8 39.7,9.8 40.6,9.5 41.5,9.6 42.3,10.0 43.2,10.1 44.1,10.8 44.9,10.7 45.8,10.7 46.6,10.5 47.5,10.6 48.4,10.2 49.2,10.7 50.1,10.8 51.0,10.9 51.8,11.6 52.7,11.6 53.6,10.8 54.4,11.0 55.3,9.7 56.1,11.5 57.0,11.3 57.9,11.4 58.7,11.8 59.6,11.4 60.5,12.0 61.3,13.1 62.2,13.5 63.1,13.5 63.9,11.7 64.8,12.1 65.6,11.8 66.5,10.6 67.4,8.2 68.2,7.4 69.1,5.1 70.0,2.6 70.8,0.5 71.7,0.0 72.6,0.9 73.4,3.3 74.3,4.4 75.1,5.3 76.0,4.7 76.9,5.9 77.7,5.5 78.6,6.9 79.5,5.4 80.3,6.2 81.2,6.6 82.1,5.5 82.9,4.4 83.8,4.1 84.7,5.7 85.5,6.9 86.4,9.6 87.2,11.3 88.1,12.7 89.0,14.8 89.8,15.9 90.7,14.6 91.6,15.5 92.4,16.8 93.3,15.9 94.2,14.6 95.0,16.1 95.9,16.4 96.7,14.2 97.6,15.0 98.5,13.7 99.3,13.8 100.2,14.4 101.1,14.4 101.9,13.8 102.8,14.5 103.7,15.6 104.5,15.5 105.4,16.3 106.2,17.0 107.1,16.8 108.0,16.8 108.8,16.4 109.7,16.5 110.6,16.0 111.4,16.2 112.3,16.4 113.2,17.2 114.0,16.7 114.9,16.7 115.7,16.8 116.6,17.4 117.5,18.0 118.3,18.4 119.2,18.2 120.1,18.6 120.9,19.0 121.8,19.9 122.7,19.1 123.5,19.7 124.4,19.3 125.2,18.6 126.1,18.8 127.0,17.4 127.8,17.3 128.7,16.1 129.6,16.1 130.4,15.9 131.3,15.6 132.2,15.8 133.0,16.0 133.9,15.8 134.8,15.8 135.6,15.5 136.5,16.1 137.3,16.5 138.2,15.7 139.1,16.3 139.9,16.8 140.8,16.1 141.7,16.2 142.5,16.1 143.4,17.0 144.3,17.1 145.1,17.3 146.0,17.7 146.8,18.7 147.7,19.5 148.6,20.5 149.4,20.3 150.3,19.7 151.2,19.1 152.0,19.9 152.9,20.3 153.8,20.7 154.6,20.3 155.5,21.8 156.3,22.3 157.2,22.5 158.1,23.4 158.9,23.6 159.8,22.9 160.7,23.4 161.5,24.0 162.4,24.3 163.3,24.5 164.1,24.0 165.0,23.8 165.8,24.0 166.7,24.7 167.6,24.8 168.4,24.6 169.3,24.6 170.2,25.0 171.0,25.4 171.9,26.5 172.8,26.3 173.6,26.9 174.5,26.4 175.3,27.1 176.2,27.2 177.1,28.1 177.9,27.5 178.8,29.1 179.7,29.6 180.5,28.7 181.4,28.3 182.3,28.3 183.1,28.5 184.0,27.1 184.9,26.5 185.7,27.5 186.6,29.7 187.4,28.4 188.3,26.1 189.2,26.8 190.0,27.1 190.9,28.6 191.8,28.3 192.6,27.9 193.5,29.2 194.4,30.0 195.2,28.4 196.1,27.8 196.9,27.6 197.8,28.4 198.7,29.6 199.5,29.6 200.4,27.8 201.3,27.8 202.1,28.1 203.0,28.5 203.9,28.5 204.7,29.3 205.6,28.4 206.4,28.5 207.3,29.1 208.2,28.8 209.0,28.4 209.9,28.1 210.8,29.6 211.6,30.0 212.5,30.6 213.4,30.2 214.2,30.1 215.1,30.0 215.9,29.5 216.8,30.3 217.7,30.8 218.5,30.7 219.4,30.9 220.3,31.4 221.1,32.4 222.0,32.2 222.9,32.6 223.7,32.7 224.6,32.2 225.4,32.7 226.3,32.9 227.2,32.9 228.0,33.9 228.9,33.9 229.8,34.8 230.6,34.1 231.5,34.1 232.4,33.8 233.2,33.8 234.1,34.0 235.0,34.3 235.8,34.5 236.7,34.6 237.5,35.0 238.4,35.4 239.3,35.0 240.1,34.7 241.0,34.7 241.9,34.7 242.7,35.1 243.6,35.7 244.5,36.4 245.3,36.2 246.2,37.0 247.0,36.6 247.9,36.2 248.8,36.1 249.6,35.7 250.5,35.7 251.4,36.5 252.2,36.8 253.1,37.5 254.0,38.6 254.8,38.7 255.7,39.0 256.5,38.9 257.4,39.7 258.3,39.9 259.1,40.0 260.0,40.0" fill="none" stroke="#1d4ed8" stroke-width="1.5"/></svg></td></tr><tr class="challenger"><th>V2 Challenger</th><td><svg class="spark" width="260" height="40" viewBox="0 0 260 40" role="img" aria-label="equity sparkline"><polyline points="0.0,0.1 0.9,0.1 1.7,0.1 2.6,0.1 3.5,0.1 4.3,0.1 5.2,0.1 6.0,0.1 6.9,0.1 7.8,0.1 8.6,0.1 9.5,0.0 10.4,0.5 11.2,0.5 12.1,0.9 13.0,0.7 13.8,0.7 14.7,1.2 15.5,1.2 16.4,1.3 17.3,1.4 18.1,1.8 19.0,1.7 19.9,1.7 20.7,1.8 21.6,1.9 22.5,2.2 23.3,2.3 24.2,2.4 25.0,2.9 25.9,3.2 26.8,3.3 27.6,3.4 28.5,4.0 29.4,4.2 30.2,4.1 31.1,4.7 32.0,4.8 32.8,4.8 33.7,5.0 34.6,5.1 35.4,5.4 36.3,5.7 37.1,6.0 38.0,6.3 38.9,6.3 39.7,6.3 40.6,6.3 41.5,6.6 42.3,7.0 43.2,7.2 44.1,7.6 44.9,7.5 45.8,7.4 46.6,7.4 47.5,7.5 48.4,7.4 49.2,7.7 50.1,7.7 51.0,7.9 51.8,8.2 52.7,8.2 53.6,8.0 54.4,8.3 55.3,8.4 56.1,8.8 57.0,9.1 57.9,9.5 58.7,9.8 59.6,10.0 60.5,10.6 61.3,10.9 62.2,11.3 63.1,11.2 63.9,10.5 64.8,10.2 65.6,10.0 66.5,10.2 67.4,9.5 68.2,10.0 69.1,8.3 70.0,7.6 70.8,6.7 71.7,6.6 72.6,7.1 73.4,8.1 74.3,8.4 75.1,8.8 76.0,9.2 76.9,10.1 77.7,9.8 78.6,10.2 79.5,10.1 80.3,10.5 81.2,11.0 82.1,10.7 82.9,10.4 83.8,10.0 84.7,10.5 85.5,10.7 86.4,11.9 87.2,13.1 88.1,13.7 89.0,13.7 89.8,13.9 90.7,12.7 91.6,13.5 92.4,13.8 93.3,13.5 94.2,13.2 95.0,13.7 95.9,15.3 96.7,14.3 97.6,14.2 98.5,13.7 99.3,13.9 100.2,14.1 101.1,14.5 101.9,14.7 102.8,15.3 103.7,15.8 104.5,15.4 105.4,15.5 106.2,15.5 107.1,15.6 108.0,15.8 108.8,16.0 109.7,16.4 110.6,16.2 111.4,16.3 112.3,16.4 113.2,16.5 114.0,16.3 114.9,16.3 115.7,16.3 116.6,16.8 117.5,17.2 118.3,17.6 119.2,17.7 120.1,17.9 120.9,18.4 121.8,18.6 122.7,18.5 123.5,18.8 124.4,18.7 125.2,18.6 126.1,18.8 127.0,18.4 127.8,18.3 128.7,18.2 129.6,18.3 130.4,18.4 131.3,18.3 132.2,18.5 133.0,18.7 133.9,18.9 134.8,18.9 135.6,19.2 136.5,19.3 137.3,19.4 138.2,19.3 139.1,19.5 139.9,19.8 140.8,19.6 141.7,20.0 142.5,20.2 143.4,20.7 144.3,20.6 145.1,20.8 146.0,21.1 146.8,21.6 147.7,21.8 148.6,22.2 149.4,22.4 150.3,22.4 151.2,22.5 152.0,22.8 152.9,23.0 153.8,23.6 154.6,23.6 155.5,24.4 156.3,24.4 157.2,24.9 158.1,25.2 158.9,25.4 159.8,25.6 160.7,25.8 161.5,26.0 162.4,26.3 163.3,26.4 164.1,27.0 165.0,27.0 165.8,27.1 166.7,27.2 167.6,27.4 168.4,27.3 169.3,27.7 170.2,27.9 171.0,28.1 171.9,28.5 172.8,28.8 173.6,29.0 174.5,28.7 175.3,28.5 176.2,28.4 177.1,28.6 177.9,28.4 178.8,29.1 179.7,29.2 180.5,28.7 181.4,28.5 182.3,28.4 183.1,28.6 184.0,28.6 184.9,28.5 185.7,28.6 186.6,29.8 187.4,30.0 188.3,28.9 189.2,29.3 190.0,29.4 190.9,30.3 191.8,30.1 192.6,29.9 193.5,30.2 194.4,30.5 195.2,30.1 196.1,30.1 196.9,30.1 197.8,30.7 198.7,30.9 199.5,30.9 200.4,30.8 201.3,30.8 202.1,30.7 203.0,30.6 203.9,30.5 204.7,30.4 205.6,30.1 206.4,30.2 207.3,30.1 208.2,30.0 209.0,30.0 209.9,30.3 210.8,30.7 211.6,30.5 212.5,30.9 213.4,30.8 214.2,31.0 215.1,31.3 215.9,31.7 216.8,31.7 217.7,32.2 218.5,32.4 219.4,32.8 220.3,33.0 221.1,33.3 222.0,33.6 222.9,33.6 223.7,33.7 224.6,33.9 225.4,34.5 226.3,34.6 227.2,34.9 228.0,35.4 228.9,35.3 229.8,35.6 230.6,35.5 231.5,35.6 232.4,35.4 233.2,35.7 234.1,35.7 235.0,35.9 235.8,36.4 236.7,36.6 237.5,36.7 238.4,36.8 239.3,37.0 240.1,37.0 241.0,37.0 241.9,36.9 242.7,36.8 243.6,37.1 244.5,37.4 245.3,37.6 246.2,38.0 247.0,37.9 247.9,37.8 248.8,37.9 249.6,37.9 250.5,38.0 251.4,38.2 252.2,38.2 253.1,38.6 254.0,39.2 254.8,39.3 255.7,39.4 256.5,39.5 257.4,39.8 258.3,40.0 259.1,40.0 260.0,40.0" fill="none" stroke="#8a2b13" stroke-width="1.5"/></svg></td></tr></table>
+<h3>Exit-reason decomposition (EI-1 reasons)</h3>
+<table><tr><th>Reason</th><th>Champion count</th><th>Champion mean net R</th><th>Challenger count</th><th>Challenger mean net R</th></tr><tr><td>LOCK_TRAIL</td><td>—</td><td>—</td><td>259</td><td>0.340</td></tr><tr><td>DRAWDOWN_GUARD</td><td>—</td><td>—</td><td>150</td><td>-0.811</td></tr><tr><td>STOP_LOSS</td><td>300</td><td>-1.204</td><td>158</td><td>-1.207</td></tr><tr><td>TARGET</td><td>173</td><td>1.414</td><td>48</td><td>1.415</td></tr><tr><td>REVERSAL_EXIT</td><td>—</td><td>—</td><td>61</td><td>-0.752</td></tr></table>
+<h3>Challenger calibration reliability</h3>
+<table><tr><th>Bin</th><th>Count</th><th>Mean predicted</th><th>Mean observed</th><th>Gap</th></tr><tr><td>bin 2 [0.59]</td><td>3</td><td>59.2%</td><td>33.3%</td><td>-25.9%</td></tr><tr><td>bin 3 [0.68]</td><td>432</td><td>67.7%</td><td>49.8%</td><td>-17.9%</td></tr></table>
+
+<h2>3 · V1 broker-confirmed evidence window (REAL data — not simulation)</h2>
+<div class="panel">
+<table>
+<tr><th>Measure</th><th>Value (broker statement, 2026-11-10 window)</th></tr>
+<tr><td>Deals in window</td><td>19</td></tr>
+<tr><td>Net USD (window)</td><td class="neg">-442.49</td></tr>
+<tr><td>Win rate / profit factor</td><td>26.3% / 0.79</td></tr>
+<tr><td>Expectancy per trade</td><td>-23.29 USD</td></tr>
+<tr><td>Balance chain in window</td><td>50000 → 49557.51 (0 breaks)</td></tr>
+<tr><td>Account state at export (28 Nov)</td><td>equity 42404.16 / balance 42404.16</td></tr>
+<tr><td>Window-vs-account gap</td><td>-7153.35 USD (window covers only the 10 Nov deals)</td></tr>
+<tr><td>Verification</td><td>netTotalMatchesDeals=true; balanceChainContinuous=true; realizedMatches=true; duplicateDealIds=false</td></tr>
+<tr><td>Median implied friction</td><td>0.600 pips/lot (theoretical mid P&amp;L vs broker Net)</td></tr>
+<tr><td>Split-second EURUSD pair</td><td>DID-S00001 + DID-S00002 (prior investigation)</td></tr>
+</table>
+<p class="note">This is the V1 champion's only broker-confirmed performance datum in the V2 track.
+No profitability claim of any kind is derived from it; it is reported exactly as the broker stated it.</p>
+</div>
+
+<h2>4 · Null-campaign calibration (framework validation, P3-1)</h2>
+<table>
+<tr><th>Comparison</th><th>Eligible replays</th><th>False positives</th><th>Rate (nominal 5%)</th></tr>
+<tr><td>Champion expectancy</td><td>200</td><td>0</td><td>0.0%</td></tr>
+<tr><td>Challenger expectancy</td><td>200</td><td>0</td><td>0.0%</td></tr>
+<tr><td>Paired win-rate (Newcombe)</td><td>200</td><td>2</td><td>1.0%</td></tr>
+</table>
+<p class="note">Pre-registered declaration: meanNetR / (sd/sqrt(n)) &gt; 1.645, n &gt;= 30, EDGE_ZERO market. 200 replays × 900 bars, EDGE_ZERO markets.</p>
+
+<h2>5 · Known-edge detection power (framework validation, P3-2)</h2>
+<table>
+<tr><th>Planted AUC</th><th>Theoretical</th><th>Mean measured</th><th>n/class (own solver)</th><th>Trials</th><th>Detection rate (predicted 80%)</th></tr>
+<tr>
+<td>0.55</td><td>0.5500</td><td>0.5482</td>
+<td>518</td><td>60</td><td>76.7%</td></tr><tr>
+<td>0.60</td><td>0.6000</td><td>0.6042</td>
+<td>125</td><td>60</td><td>78.3%</td></tr>
+</table>
+
+<h2>6 · Exit-dominance attribution (P3-3)</h2>
+<table>
+<tr><th>Arm</th><th>Planted deficit (R)</th><th>Dominant channel</th><th>Attribution share (accept ≥ 90%)</th></tr>
+<tr><td>Win truncation (controlled)</td><td>100</td><td>WIN_TRUNCATION</td><td>90.9%</td></tr>
+<tr><td>Loss extension (controlled)</td><td>100</td><td>LOSS_EXTENSION</td><td>90.9%</td></tr>
+<tr><td>Paired simulator (observational)</td><td>—</td><td>MIXED (challenger) / COST_DRAG (champion)</td><td>50.9% WIN_TRUNCATION</td></tr>
+</table>
+<p class="note">the simulator fills stops at-level (bounded at 1R + slip), so loss extension is planted only in the controlled arm; the observational arm reports live shares.</p>
+
+<h2>7 · Reversal detection (challenger gate vs regime ground truth — one-to-one matching)</h2>
+<table>
+<tr><th>Ground-truth points</th><th>Gate events</th><th>True positives</th><th>False alarms</th><th>Repeated observations</th><th>Precision</th><th>Recall</th><th>Median latency (bars)</th></tr>
+<tr><td>3</td><td>336</td><td>3</td><td>327</td><td>6</td><td>0.009</td><td>1.000</td><td>-2</td></tr>
+</table>
+<p class="note">one-to-one greedy nearest-first matching within tolerance; surplus events near an already-claimed point are counted as repeated observations, not true positives; events with no point in tolerance are false alarms; latency = event bar minus ground-truth bar (negative = fired early). Negative latency = the event fired before the planted reversal. Repeated
+observations of an already-matched reversal are counted as repeated, NOT as new true positives; precision counts
+them as detections that failed to produce a new match.</p>
+
+<h2>7b · Entry intelligence on common prediction opportunities (primary entry metric)</h2>
+<table>
+<tr><th>Common opportunities</th><th>Shared-score AUC (z)</th><th>Challenger abstained</th><th>Taken win rate</th><th>Abstained win rate</th><th>Difference (95% CI)</th></tr>
+<tr><td>435</td>
+<td>0.5608 (z 2.21)</td>
+<td>47</td>
+<td>49.7%</td>
+<td>48.9%</td>
+<td>[-13.9%, 15.2%]</td></tr>
+</table>
+<p class="note">sign of fixed-horizon forward close-to-close return over windowBars from the registration bar (identical for both engines; exit-policy-free). Both engines share the S1 entry scoring by design, so the common-set AUC is identical for both engines; the paired delta isolates exit/reversal/abstention layers. The abstention block measures whether the challenger's floor/veto filters remove opportunities that realize LOWER win rates (positive selection).</p>
+
+<h2>8 · Attribution ledger summary (single source of truth)</h2>
+<table><tr><th>Engine</th><th>Trades</th><th>Total net (USD)</th><th>Commission (USD)</th><th>Swap (USD)</th><th>Net per lot</th></tr><tr><td>V2-CHALLENGER</td><td>676</td><td>-2947.30</td><td>811.20</td><td>0.44</td><td>-21.80</td></tr><tr><td>V1-CHAMPION-MIRROR</td><td>473</td><td>-1637.05</td><td>567.60</td><td>0.77</td><td>-17.30</td></tr></table>
+<p class="note">1149 frozen rows; every dashboard figure above is derived from these rows and the campaign metric objects. Provenance: SYNTHETIC_CAMPAIGN for simulation rows; the broker evidence block is the only real-data section.</p>
+
+<h2>9 · Evidential limits (binding)</h2>
+<div class="panel"><ul>
+<li>All engine comparisons run on deterministic synthetic markets; they validate the measurement machinery and paired policy deltas — nothing more.</li>
+<li>The only broker-confirmed performance datum is the V1 evidence window above; it is negative and is reported as-is.</li>
+<li>No out-of-sample, walk-forward or broker-confirmed evaluation of the challenger exists yet; no profitability claim is made or implied.</li>
+<li>P5 (broker-connected DEMO) remains blocked on independent architecture review; nothing here provisions or connects a broker.</li>
+</ul></div>
+
+<h2>10 · Reproduction</h2>
+<div class="panel"><p>
+<code>node --test apps/api/scripts/research/v2-*.test.cjs</code> (CI-verified)<br>
+<code>node apps/api/scripts/research/v2-demo-evaluation-run.cjs --seed 20261128</code> (regenerates this dashboard byte-identically)<br>
+Market: TREND_REGIMES · 3000 bars · instrument EURUSD · costs frozen in <code>v2-paired-engine-simulator.cjs</code>
+</p></div>
+</body></html>

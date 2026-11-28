@@ -5124,14 +5124,23 @@ describe('VpsForexSignalCollectorService', () => {
       }),
     });
 
-    await (collector as any).fetchSixPairSeries(
-      'real-key-123456',
-      fetchMock as unknown as typeof fetch,
-    );
-    await (collector as any).fetchSixPairSeries(
-      'real-key-123456',
-      fetchMock as unknown as typeof fetch,
-    );
+    // Pin the wall clock: the per-minute fallback cache is keyed on the ISO
+    // minute, so an unpinned test that crosses a minute boundary between the
+    // two calls legitimately misses the cache (6 -> 12 broker calls) and
+    // flakes. Fixed system time keeps both calls inside one minute bucket.
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-28T19:40:20.000Z'));
+    try {
+      await (collector as any).fetchSixPairSeries(
+        'real-key-123456',
+        fetchMock as unknown as typeof fetch,
+      );
+      await (collector as any).fetchSixPairSeries(
+        'real-key-123456',
+        fetchMock as unknown as typeof fetch,
+      );
+    } finally {
+      jest.useRealTimers();
+    }
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect((broker as any).getOhlcvForConnection).toHaveBeenCalledTimes(6);
