@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url';
+
 /** @type {import('next').NextConfig} */
 const browserSecurityHeaders = [
   {
@@ -11,6 +13,11 @@ const browserSecurityHeaders = [
 ];
 
 const nextConfig = {
+  // CI-only portable runtime output; existing runtime build remains unchanged.
+  ...(process.env.IREXPRO_HOSTED_STANDALONE === '1' ? {
+    output: 'standalone',
+    outputFileTracingRoot: fileURLToPath(new URL('../../', import.meta.url)),
+  } : {}),
   reactStrictMode: true,
   poweredByHeader: false,
   transpilePackages: ['@irexpro/types', '@irexpro/api-client'],

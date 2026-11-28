@@ -12,6 +12,17 @@ on:
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
       - '.github/workflows/hosted-runtime-build.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'packages/**'
+      - 'services/ai-engine/**'
+      - 'scripts/deployment/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/hosted-runtime-build.yml'
   workflow_dispatch:
 
 permissions:
@@ -29,6 +40,7 @@ jobs:
     env:
       NEXT_PUBLIC_API_BASE_URL: /api/v1
       NEXT_TELEMETRY_DISABLED: '1'
+      IREXPRO_HOSTED_STANDALONE: '1'
       CANDIDATE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Checkout exact candidate
@@ -56,25 +68,12 @@ jobs:
         run: |
           pnpm --filter @irexpro/api test --runInBand
           pnpm --filter @irexpro/web test --runInBand
-      - name: Archive compiled intermediates
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          out="$RUNNER_TEMP/irexpro-compiled"
-          mkdir -m 700 "$out"
-          test -f apps/api/dist/main.js
-          test -f apps/web/.next/BUILD_ID
-          test -f apps/admin/.next/BUILD_ID
-          tar -C apps/api -czf "$out/api-dist.tar.gz" dist
-          tar -C apps/web --exclude=.next/cache --exclude=.next/diagnostics -czf "$out/web-build.tar.gz" .next
-          tar -C apps/admin --exclude=.next/cache --exclude=.next/diagnostics -czf "$out/admin-build.tar.gz" .next
-          printf '%s\n' "$CANDIDATE_SHA" > "$out/SOURCE_SHA"
-          printf '%s\n' 'compiled-intermediates-not-deployable' > "$out/STATUS"
-          (cd "$out" && sha256sum api-dist.tar.gz web-build.tar.gz admin-build.tar.gz SOURCE_SHA STATUS > SHA256SUMS && sha256sum -c SHA256SUMS)
-      - name: Retain hosted build intermediates
+      - name: Assemble and smoke-test Node runtime candidates
+        run: bash scripts/deployment/package-node-runtime-candidate.sh "$CANDIDATE_SHA" "$RUNNER_TEMP/irexpro-node-runtime"
+      - name: Retain hosted Node runtime candidates
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
-          name: irexpro-compiled-candidate-${{ env.CANDIDATE_SHA }}
-          path: ${{ runner.temp }}/irexpro-compiled/
+          name: irexpro-node-runtime-candidate-${{ env.CANDIDATE_SHA }}
+          path: ${{ runner.temp }}/irexpro-node-runtime/
           if-no-files-found: error
           retention-days: 14
