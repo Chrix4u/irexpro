@@ -331,3 +331,10 @@ Next: finish CI/review of diagnostics and UI, then the read-only statement compa
 - [ ] Produce component build artifacts on hosted GitHub Actions, including migration and install tools, approved model assets and provenance. Source tree currently contains no model binaries. Validate all component contents, ABI compatibility, licensing, nested archive safety, authenticity/signatures and fresh-host installation before customer distribution. Mobile and connector packages remain separate release assets.
 - [ ] Preserve remaining staged/unstaged/untracked changes and private evidence using verified secure recovery outside the production host. Complete release/rollback verification and single stable runtime cutover only after coordinated quiescence. Do not equate the candidate packager or local bundle with an installable customer release.
 - [x] Recheck website, API liveness/readiness, PostgreSQL and last backup/verification jobs after cleanup; no execution or database changes made.
+
+
+### Mandatory runtime-only VPS policy — 2026-11-28
+
+- [x] Owner mandates all development worktrees, compilation, testing, research and release assembly off production VPS; VPS receives only verified deployable artifacts. PR #875 adds hosted CI compilation, checksum-bound intermediate artifacts and a default hard hold on eight legacy VPS build/research workflow entry jobs, pending review. Administrative disabling could not be completed with the available credential; do not claim those workflows are disabled on main.
+- [ ] Validate and merge the policy safely; complete full runtime artifact build (target ABI, production dependencies, approved models, migration/install tools and SBOM), isolated acceptance, and immutable release distribution. Replace legacy CD with artifact transfer and verified rollback, then resume automated deployments. Keep current runtime unchanged during transition.
+- [ ] Migrate remote research to hosted compute using approved datasets; keep read-only runtime diagnostics separate. Securely preserve remaining unique work and remove obsolete source directories. No build or test execution on the production VPS from now on.
