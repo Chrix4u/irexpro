@@ -521,4 +521,6 @@ rollback_output="$(run_rollback "$FIXTURE_CANDIDATE_SHA" "$FIXTURE_PRIOR_SHA")"
 [[ "$rollback_output" == *"rollback_sha=$FIXTURE_PRIOR_SHA"* ]] || fail 'Rollback evidence omitted rollback SHA.'
 [[ "$(git -C "$FIXTURE_REPO" rev-parse HEAD)" == "$FIXTURE_PRIOR_SHA" ]] || fail 'Rollback did not finish on the exact rollback SHA.'
 
+python3 "$SCRIPT_DIR/test-package-runtime-candidate.py"
+
 printf 'Deployment script safety tests passed.\n'
