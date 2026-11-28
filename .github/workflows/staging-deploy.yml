@@ -11,10 +11,9 @@ permissions:
 jobs:
   deploy:
     name: Deploy exact verified main SHA to staging
+    # Runtime-only VPS policy: held until the hosted artifact replacement is verified.
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      vars.STAGING_CD_ENABLED == 'true'
+      false && (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && vars.STAGING_CD_ENABLED == 'true')
     # Acquire the shared VPS worktree lock only after the deploy job's
     # success condition is satisfied. Failed/cancelled release-gate events
     # therefore skip without ever entering the shared concurrency queue.

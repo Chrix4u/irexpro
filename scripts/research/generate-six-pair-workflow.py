@@ -569,10 +569,9 @@ __SSH_REMOVE__"""
 
 VALIDATE_JOB = f"""  validate:
     name: Validate candidate and initialize frozen research state
+    # Runtime-only VPS policy: held until the hosted artifact replacement is verified.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main')
+      false && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'))
     # Acquire the shared VPS worktree lock only for a research run that
     # actually passed its trigger condition. workflow_run events from failed
     # or cancelled deploys skip without consuming/cancelling the pending slot.

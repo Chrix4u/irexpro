@@ -1,0 +1,83 @@
+name: Hosted Runtime Build Candidate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'packages/**'
+      - 'services/ai-engine/**'
+      - 'scripts/deployment/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/hosted-runtime-build.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'packages/**'
+      - 'services/ai-engine/**'
+      - 'scripts/deployment/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/hosted-runtime-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hosted-runtime-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Compile runtime components off VPS (candidate only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      NEXT_PUBLIC_API_BASE_URL: /api/v1
+      NEXT_TELEMETRY_DISABLED: '1'
+      IREXPRO_HOSTED_STANDALONE: '1'
+      CANDIDATE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Verify source identity
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+      - name: Setup Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Install locked dependencies on hosted runner
+        run: pnpm install --frozen-lockfile
+      - name: Compile server and browser applications
+        run: |
+          pnpm --filter @irexpro/api build
+          pnpm --filter @irexpro/web build
+          pnpm --filter @irexpro/admin build
+      - name: Test API and web
+        run: |
+          # Match API CI's established exit behavior for known Jest open handles.
+          # Assertion failures still fail the job; packaging cannot run on red tests.
+          pnpm --filter @irexpro/api exec jest --runInBand --forceExit
+          pnpm --filter @irexpro/web test --runInBand
+      - name: Assemble and smoke-test Node runtime candidates
+        run: bash scripts/deployment/package-node-runtime-candidate.sh "$CANDIDATE_SHA" "$RUNNER_TEMP/irexpro-node-runtime"
+      - name: Verify candidate on target-compatible AlmaLinux 9
+        run: bash scripts/deployment/verify-node-runtime-almalinux.sh "$RUNNER_TEMP/irexpro-node-runtime"
+      - name: Retain hosted Node runtime candidates
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: irexpro-node-runtime-candidate-${{ env.CANDIDATE_SHA }}
+          path: ${{ runner.temp }}/irexpro-node-runtime/
+          if-no-files-found: error
+          retention-days: 14
