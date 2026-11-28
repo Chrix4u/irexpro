@@ -27,6 +27,31 @@ cp -a apps/api/dist "$scratch/api/dist"
 test -f "$scratch/api/dist/main.js"
 test -f "$scratch/api/dist/database/data-source.js"
 
+# Legacy pnpm deploy may hoist a self-reference to the original workspace
+# package. Retarget only that exact, verified API alias to the assembled API
+# root; leave every other link subject to the strict portability check below.
+python3 - "$scratch" "$PWD/apps/api" <<'PY'
+import json, os, pathlib, sys
+scratch = pathlib.Path(sys.argv[1]).resolve()
+source = pathlib.Path(sys.argv[2]).resolve(strict=True)
+api = scratch / "api"
+alias = api / "node_modules/.pnpm/node_modules/@irexpro/api"
+if alias.is_symlink():
+    original = scratch / "pruned/node_modules/.pnpm/node_modules/@irexpro/api"
+    if not original.is_symlink():
+        raise SystemExit("unexpected API self-link provenance")
+    target = original.resolve(strict=True)
+    if target not in (source, (scratch / "pruned").resolve()):
+        raise SystemExit("unexpected API self-link target")
+    for root in (target, api):
+        if json.loads((root / "package.json").read_text()).get("name") != "@irexpro/api":
+            raise SystemExit("unexpected API self-link package identity")
+    alias.unlink()
+    alias.symlink_to(os.path.relpath(api, alias.parent), target_is_directory=True)
+    if alias.resolve(strict=True) != api.resolve(strict=True):
+        raise SystemExit("API self-link normalization failed")
+PY
+
 # The standalone trace is rooted at the repository; copy static files explicitly.
 for component in web admin; do
   source="apps/$component"
