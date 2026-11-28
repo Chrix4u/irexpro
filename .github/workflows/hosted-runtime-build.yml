@@ -66,7 +66,9 @@ jobs:
           pnpm --filter @irexpro/admin build
       - name: Test API and web
         run: |
-          pnpm --filter @irexpro/api test --runInBand
+          # Match API CI's established exit behavior for known Jest open handles.
+          # Assertion failures still fail the job; packaging cannot run on red tests.
+          pnpm --filter @irexpro/api exec jest --runInBand --forceExit
           pnpm --filter @irexpro/web test --runInBand
       - name: Assemble and smoke-test Node runtime candidates
         run: bash scripts/deployment/package-node-runtime-candidate.sh "$CANDIDATE_SHA" "$RUNNER_TEMP/irexpro-node-runtime"
