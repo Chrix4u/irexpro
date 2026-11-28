@@ -45,7 +45,10 @@ const PAIRED_SIMULATOR_REFUSALS = Object.freeze([
  * Run one paired replay. config: { market (generateMarketPath output),
  * startingBalanceUsd (default 50000), leverage (default 30),
  * costModel (partial override of DEFAULT_COST_MODEL),
- * slippageSeed (default market.seed) }.
+ * slippageSeed (default market.seed),
+ * challengerExitPreset, challengerEntryGate, challengerConfidenceFloor
+ * (EXPERIMENTAL ablation arms only; defaults = the frozen pre-registered
+ * challenger policy) }.
  */
 function runPairedReplay(config) {
   const market = config && config.market;
@@ -107,7 +110,17 @@ function runPairedReplay(config) {
     },
     {
       name: 'CHALLENGER',
-      policy: createEnginePolicy('CHALLENGER', { engineIdentity: challengerIdentity, pip }),
+      policy: createEnginePolicy('CHALLENGER', {
+        engineIdentity: challengerIdentity,
+        pip,
+        // Experimental ablation arms only; default = frozen preset/policy.
+        exitPreset: config && config.challengerExitPreset !== undefined
+          ? config.challengerExitPreset : null,
+        entryGateDirectionQuality: config
+          ? config.challengerEntryGate : undefined,
+        confidenceFloor: config
+          ? config.challengerConfidenceFloor : undefined,
+      }),
       trades: [],
       equityCurve: [],
       balance: startingBalanceUsd,
@@ -377,6 +390,7 @@ function runPairedReplay(config) {
       equityCurve: Object.freeze(engines[1].equityCurve.slice()),
       registrations: Object.freeze(engines[1].registrations.slice()),
       reversalEvents: Object.freeze(engines[1].policy.reversalEvents()),
+      exitPresetIsFrozen: engines[1].policy.exitPresetIsFrozen,
     }),
     ledger,
   });

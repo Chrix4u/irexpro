@@ -306,6 +306,16 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify V2 E-10 campaign matrix, walk-forward and uncertainty refusals
+        run: node --test apps/api/scripts/research/v2-e10-campaign.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 ablation campaign truncation, turnover and cost-drag arms
+        run: node --test apps/api/scripts/research/v2-ablation-campaign.test.cjs
+        env:
+          NODE_ENV: test
+
   build:
     name: Build
     runs-on: ubuntu-24.04

@@ -1,0 +1,2518 @@
+{
+  "artifact": "v2-e10-campaign-v1",
+  "date": "2026-11-28",
+  "nullCampaign": {
+    "replays": 1000,
+    "nBars": 900,
+    "minTrades": 30,
+    "falsePositiveRate": {
+      "champion": 0,
+      "challenger": 0,
+      "pairedWinRate": 0.01
+    },
+    "eligible": {
+      "champion": 1000,
+      "challenger": 1000,
+      "paired": 1000
+    },
+    "declared": {
+      "champion": 0,
+      "challenger": 0,
+      "paired": 10
+    },
+    "nominalOneSided": 0.05,
+    "championWilson95": [
+      2.168404344971009e-19,
+      0.0038267585456940676
+    ],
+    "preRegisteredDeclaration": "meanNetR / (sd/sqrt(n)) > 1.645, n >= 30, EDGE_ZERO market"
+  },
+  "edgeCampaign": {
+    "campaigns": [
+      {
+        "plantedAuc": 0.55,
+        "verifiedPlantedAuc": 0.5499999999999997,
+        "perClassN": 518,
+        "trials": 1000,
+        "meanMeasuredAuc": 0.5510669079172944,
+        "detectionRate": 0.82,
+        "predictedPower": 0.8
+      },
+      {
+        "plantedAuc": 0.6,
+        "verifiedPlantedAuc": 0.6000000000000001,
+        "perClassN": 125,
+        "trials": 1000,
+        "meanMeasuredAuc": 0.6009671679999999,
+        "detectionRate": 0.802,
+        "predictedPower": 0.8
+      }
+    ],
+    "note": "Equal-variance binormal planting: positives N(a,1), negatives N(0,1); true AUC = Phi(a/sqrt(2)) exactly. Detection: one-sided z > 1.96 at the framework's own required-N. Framework validation, not engine performance."
+  },
+  "matrix": {
+    "cells": [
+      {
+        "instrument": "EURUSD",
+        "scenario": "TREND_REGIMES",
+        "costModel": "frozen broker-calibrated (spread 0.8 pip, commission $3/lot/side, slippage 0.1 pip, swap -0.55/lot/night)",
+        "aggregate": {
+          "replays": 250,
+          "championNetR": {
+            "n": 250,
+            "mean": -0.24895177207419575,
+            "se": 0.006651160765279182,
+            "interval95": [
+              -0.2619878077323554,
+              -0.2359157364160361
+            ]
+          },
+          "challengerNetR": {
+            "n": 250,
+            "mean": -0.2985320259329302,
+            "se": 0.004420518235726749,
+            "interval95": [
+              -0.30719608253629815,
+              -0.28986796932956227
+            ]
+          },
+          "pairedDeltaNetR": {
+            "n": 250,
+            "mean": -0.049580253858734234,
+            "se": 0.004800810111686176,
+            "interval95": [
+              -0.05898966884847512,
+              -0.04017083886899335
+            ]
+          },
+          "championTradesPerReplay": {
+            "n": 250,
+            "mean": 177.46,
+            "se": 0.6222139509872893,
+            "interval95": [
+              176.24048305576716,
+              178.67951694423286
+            ]
+          },
+          "challengerTradesPerReplay": {
+            "n": 250,
+            "mean": 253.532,
+            "se": 0.6204577141920326,
+            "interval95": [
+              252.31592521666133,
+              254.7480747833387
+            ]
+          },
+          "challengerTurnoverPer1000Bars": {
+            "n": 250,
+            "mean": 211.27666666666676,
+            "se": 0.5170480951600271,
+            "interval95": [
+              210.26327101388452,
+              212.290062319449
+            ]
+          },
+          "championTurnoverPer1000Bars": {
+            "n": 250,
+            "mean": 147.88333333333327,
+            "se": 0.5185116258227412,
+            "interval95": [
+              146.86706921313922,
+              148.89959745352732
+            ]
+          },
+          "challengerCostDragR": {
+            "n": 250,
+            "mean": 0.2891475831941081,
+            "se": 0.0029929197680742354,
+            "interval95": [
+              0.28328156819379424,
+              0.29501359819442197
+            ]
+          },
+          "championCostDragR": {
+            "n": 250,
+            "mean": 0.265850661445263,
+            "se": 0.0027695399947523123,
+            "interval95": [
+              0.2604224627589883,
+              0.2712788601315377
+            ]
+          },
+          "challengerWinRate": {
+            "n": 250,
+            "mean": 0.40296891018938197,
+            "se": 0.002306697133280408,
+            "interval95": [
+              0.39844786684924915,
+              0.4074899535295148
+            ]
+          },
+          "championWinRate": {
+            "n": 250,
+            "mean": 0.36592984072870954,
+            "se": 0.0023610639220573893,
+            "interval95": [
+              0.36130224043977827,
+              0.3705574410176408
+            ]
+          },
+          "reversalPrecision": {
+            "n": 250,
+            "mean": 0.007982273728325467,
+            "se": 0.0004269639335595295,
+            "interval95": [
+              0.007145439789250398,
+              0.008819107667400537
+            ]
+          },
+          "reversalRecall": {
+            "n": 250,
+            "mean": 0.71,
+            "se": 0.028545742900667404,
+            "interval95": [
+              0.6540513715614362,
+              0.7659486284385637
+            ]
+          },
+          "reversalFalseAlarmShare": {
+            "n": 250,
+            "mean": 0.6980386877195417,
+            "se": 0.02734261175743395,
+            "interval95": [
+              0.6444481530089944,
+              0.751629222430089
+            ]
+          },
+          "commonOpportunityAuc": {
+            "n": 250,
+            "mean": 0.5012508542263687,
+            "se": 0.003202238429337048,
+            "interval95": [
+              0.49497458218545154,
+              0.5075271262672859
+            ]
+          },
+          "abstentionWinRateDelta": {
+            "n": 250,
+            "mean": 0.004996118239534676,
+            "se": 0.008005644759152256,
+            "interval95": [
+              -0.010694657285192416,
+              0.02068689376426177
+            ]
+          }
+        }
+      },
+      {
+        "instrument": "EURUSD",
+        "scenario": "EDGE_ZERO",
+        "costModel": "frozen broker-calibrated (spread 0.8 pip, commission $3/lot/side, slippage 0.1 pip, swap -0.55/lot/night)",
+        "aggregate": {
+          "replays": 250,
+          "championNetR": {
+            "n": 250,
+            "mean": -0.3062980196008439,
+            "se": 0.00572342866120329,
+            "interval95": [
+              -0.31751573373337055,
+              -0.29508030546831726
+            ]
+          },
+          "challengerNetR": {
+            "n": 250,
+            "mean": -0.3515098379729803,
+            "se": 0.0035119332935318907,
+            "interval95": [
+              -0.35839310079870423,
+              -0.34462657514725636
+            ]
+          },
+          "pairedDeltaNetR": {
+            "n": 250,
+            "mean": -0.04521181837213657,
+            "se": 0.004264064302779724,
+            "interval95": [
+              -0.05356923089926993,
+              -0.03685440584500321
+            ]
+          },
+          "championTradesPerReplay": {
+            "n": 250,
+            "mean": 176.672,
+            "se": 0.5397471369887479,
+            "interval95": [
+              175.614115042399,
+              177.729884957601
+            ]
+          },
+          "challengerTradesPerReplay": {
+            "n": 250,
+            "mean": 252.136,
+            "se": 0.6265527026169677,
+            "interval95": [
+              250.90797925876802,
+              253.36402074123197
+            ]
+          },
+          "challengerTurnoverPer1000Bars": {
+            "n": 250,
+            "mean": 210.11333333333346,
+            "se": 0.5221272521808064,
+            "interval95": [
+              209.08998271564016,
+              211.13668395102675
+            ]
+          },
+          "championTurnoverPer1000Bars": {
+            "n": 250,
+            "mean": 147.2266666666667,
+            "se": 0.44978928082395647,
+            "interval95": [
+              146.34509586866585,
+              148.10823746466752
+            ]
+          },
+          "challengerCostDragR": {
+            "n": 250,
+            "mean": 0.3288559268043059,
+            "se": 0.00031224311405532776,
+            "interval95": [
+              0.3282439415415096,
+              0.32946791206710224
+            ]
+          },
+          "championCostDragR": {
+            "n": 250,
+            "mean": 0.3027943119920264,
+            "se": 0.00029022645305789533,
+            "interval95": [
+              0.30222547859218524,
+              0.30336314539186754
+            ]
+          },
+          "challengerWinRate": {
+            "n": 250,
+            "mean": 0.3753506482673993,
+            "se": 0.002017326670872005,
+            "interval95": [
+              0.3713967606162503,
+              0.37930453591854824
+            ]
+          },
+          "championWinRate": {
+            "n": 250,
+            "mean": 0.3543064567010709,
+            "se": 0.0022024347736549327,
+            "interval95": [
+              0.3499897638323591,
+              0.35862314956978275
+            ]
+          },
+          "reversalPrecision": {
+            "n": 250,
+            "mean": 0,
+            "se": 0,
+            "interval95": [
+              0,
+              0
+            ]
+          },
+          "reversalRecall": {
+            "n": 250,
+            "mean": 0,
+            "se": 0,
+            "interval95": [
+              0,
+              0
+            ]
+          },
+          "reversalFalseAlarmShare": {
+            "n": 250,
+            "mean": 0,
+            "se": 0,
+            "interval95": [
+              0,
+              0
+            ]
+          },
+          "commonOpportunityAuc": {
+            "n": 250,
+            "mean": 0.4951003779939801,
+            "se": 0.0030267310653251077,
+            "interval95": [
+              0.4891680940682612,
+              0.501032661919699
+            ]
+          },
+          "abstentionWinRateDelta": {
+            "n": 250,
+            "mean": 0.012408912055424492,
+            "se": 0.008618810029552657,
+            "interval95": [
+              -0.0044836453253376506,
+              0.029301469436186636
+            ]
+          }
+        }
+      },
+      {
+        "instrument": "EURUSD",
+        "scenario": "REVERSION",
+        "costModel": "frozen broker-calibrated (spread 0.8 pip, commission $3/lot/side, slippage 0.1 pip, swap -0.55/lot/night)",
+        "aggregate": {
+          "replays": 250,
+          "championNetR": {
+            "n": 250,
+            "mean": -0.407056523050266,
+            "se": 0.005233022614833686,
+            "interval95": [
+              -0.41731305898652593,
+              -0.3967999871140061
+            ]
+          },
+          "challengerNetR": {
+            "n": 250,
+            "mean": -0.390901969597686,
+            "se": 0.0030435565989850207,
+            "interval95": [
+              -0.3968672309636591,
+              -0.38493670823171294
+            ]
+          },
+          "pairedDeltaNetR": {
+            "n": 250,
+            "mean": 0.01615455345258023,
+            "se": 0.0042134304945646165,
+            "interval95": [
+              0.007896381366731384,
+              0.024412725538429075
+            ]
+          },
+          "championTradesPerReplay": {
+            "n": 250,
+            "mean": 176.38,
+            "se": 0.5653289194341594,
+            "interval95": [
+              175.27197566975013,
+              177.48802433024986
+            ]
+          },
+          "challengerTradesPerReplay": {
+            "n": 250,
+            "mean": 249.848,
+            "se": 0.571171191605881,
+            "interval95": [
+              248.7285250266154,
+              250.96747497338464
+            ]
+          },
+          "challengerTurnoverPer1000Bars": {
+            "n": 250,
+            "mean": 208.20666666666665,
+            "se": 0.4759759930049008,
+            "interval95": [
+              207.2737708555128,
+              209.1395624778205
+            ]
+          },
+          "championTurnoverPer1000Bars": {
+            "n": 250,
+            "mean": 146.98333333333338,
+            "se": 0.47110743286179946,
+            "interval95": [
+              146.05997972479184,
+              147.9066869418749
+            ]
+          },
+          "challengerCostDragR": {
+            "n": 250,
+            "mean": 0.32892481540430385,
+            "se": 0.00032002843977314296,
+            "interval95": [
+              0.3282975711833723,
+              0.32955205962523537
+            ]
+          },
+          "championCostDragR": {
+            "n": 250,
+            "mean": 0.30265451366621554,
+            "se": 0.00028500843229842303,
+            "interval95": [
+              0.3020959073992142,
+              0.30321311993321687
+            ]
+          },
+          "challengerWinRate": {
+            "n": 250,
+            "mean": 0.35465393234536813,
+            "se": 0.0018451579087498818,
+            "interval95": [
+              0.3510374892699031,
+              0.3582703754208332
+            ]
+          },
+          "championWinRate": {
+            "n": 250,
+            "mean": 0.315714296834145,
+            "se": 0.0019975520294378503,
+            "interval95": [
+              0.31179916676831987,
+              0.3196294268999701
+            ]
+          },
+          "reversalPrecision": {
+            "n": 250,
+            "mean": 0,
+            "se": 0,
+            "interval95": [
+              0,
+              0
+            ]
+          },
+          "reversalRecall": {
+            "n": 250,
+            "mean": 0,
+            "se": 0,
+            "interval95": [
+              0,
+              0
+            ]
+          },
+          "reversalFalseAlarmShare": {
+            "n": 250,
+            "mean": 0,
+            "se": 0,
+            "interval95": [
+              0,
+              0
+            ]
+          },
+          "commonOpportunityAuc": {
+            "n": 250,
+            "mean": 0.47747206151115895,
+            "se": 0.002818379661839846,
+            "interval95": [
+              0.4719481388356207,
+              0.4829959841866972
+            ]
+          },
+          "abstentionWinRateDelta": {
+            "n": 250,
+            "mean": 0.0024687933838051426,
+            "se": 0.007979622702827724,
+            "interval95": [
+              -0.013170979847319892,
+              0.018108566614930176
+            ]
+          }
+        }
+      },
+      {
+        "instrument": "EURUSD",
+        "scenario": "PLANTED_DRIFT",
+        "costModel": "frozen broker-calibrated (spread 0.8 pip, commission $3/lot/side, slippage 0.1 pip, swap -0.55/lot/night)",
+        "aggregate": {
+          "replays": 250,
+          "championNetR": {
+            "n": 250,
+            "mean": -0.2172714835689925,
+            "se": 0.005928515461582617,
+            "interval95": [
+              -0.2288911604471378,
+              -0.2056518066908472
+            ]
+          },
+          "challengerNetR": {
+            "n": 250,
+            "mean": -0.30736343875850325,
+            "se": 0.0032632150742141442,
+            "interval95": [
+              -0.3137592228282203,
+              -0.3009676546887862
+            ]
+          },
+          "pairedDeltaNetR": {
+            "n": 250,
+            "mean": -0.09009195518951052,
+            "se": 0.004329024193364373,
+            "interval95": [
+              -0.09857668676363374,
+              -0.0816072236153873
+            ]
+          },
+          "championTradesPerReplay": {
+            "n": 250,
+            "mean": 177.432,
+            "se": 0.5696944012743792,
+            "interval95": [
+              176.31541948250066,
+              178.54858051749932
+            ]
+          },
+          "challengerTradesPerReplay": {
+            "n": 250,
+            "mean": 255.964,
+            "se": 0.6584474376231179,
+            "interval95": [
+              254.67346672636643,
+              257.25453327363357
+            ]
+          },
+          "challengerTurnoverPer1000Bars": {
+            "n": 250,
+            "mean": 213.3033333333333,
+            "se": 0.5487061980192647,
+            "interval95": [
+              212.22788893863867,
+              214.37877772802796
+            ]
+          },
+          "championTurnoverPer1000Bars": {
+            "n": 250,
+            "mean": 147.86000000000004,
+            "se": 0.4747453343953159,
+            "interval95": [
+              146.92951623541725,
+              148.79048376458283
+            ]
+          },
+          "challengerCostDragR": {
+            "n": 250,
+            "mean": 0.32449661402165625,
+            "se": 0.0003788219657858502,
+            "interval95": [
+              0.32375413660630675,
+              0.32523909143700575
+            ]
+          },
+          "championCostDragR": {
+            "n": 250,
+            "mean": 0.2986648576063029,
+            "se": 0.0003282693308907689,
+            "interval95": [
+              0.2980214615354529,
+              0.2993082536771529
+            ]
+          },
+          "challengerWinRate": {
+            "n": 250,
+            "mean": 0.3952617752273849,
+            "se": 0.0019355879362978482,
+            "interval95": [
+              0.39146809255340687,
+              0.399055457901363
+            ]
+          },
+          "championWinRate": {
+            "n": 250,
+            "mean": 0.3873452171364884,
+            "se": 0.0022518128079593966,
+            "interval95": [
+              0.3829317450981491,
+              0.3917586891748277
+            ]
+          },
+          "reversalPrecision": {
+            "n": 250,
+            "mean": 0,
+            "se": 0,
+            "interval95": [
+              0,
+              0
+            ]
+          },
+          "reversalRecall": {
+            "n": 250,
+            "mean": 0,
+            "se": 0,
+            "interval95": [
+              0,
+              0
+            ]
+          },
+          "reversalFalseAlarmShare": {
+            "n": 250,
+            "mean": 0,
+            "se": 0,
+            "interval95": [
+              0,
+              0
+            ]
+          },
+          "commonOpportunityAuc": {
+            "n": 250,
+            "mean": 0.505032217308438,
+            "se": 0.00308296675045634,
+            "interval95": [
+              0.49898971346434656,
+              0.5110747211525294
+            ]
+          },
+          "abstentionWinRateDelta": {
+            "n": 250,
+            "mean": -0.0076744372989485925,
+            "se": 0.007335619277338304,
+            "interval95": [
+              -0.022051987000237687,
+              0.0067031124023405
+            ]
+          }
+        }
+      },
+      {
+        "instrument": "GBPUSD",
+        "scenario": "TREND_REGIMES",
+        "costModel": "frozen broker-calibrated (spread 0.8 pip, commission $3/lot/side, slippage 0.1 pip, swap -0.55/lot/night)",
+        "aggregate": {
+          "replays": 250,
+          "championNetR": {
+            "n": 250,
+            "mean": -0.19305990353737007,
+            "se": 0.006291458729159407,
+            "interval95": [
+              -0.20539093615400825,
+              -0.1807288709207319
+            ]
+          },
+          "challengerNetR": {
+            "n": 250,
+            "mean": -0.2476969151887779,
+            "se": 0.003959236995213258,
+            "interval95": [
+              -0.25545687716686405,
+              -0.23993695321069175
+            ]
+          },
+          "pairedDeltaNetR": {
+            "n": 250,
+            "mean": -0.05463701165140779,
+            "se": 0.00461208560716105,
+            "interval95": [
+              -0.06367653340636159,
+              -0.045597489896453985
+            ]
+          },
+          "championTradesPerReplay": {
+            "n": 250,
+            "mean": 175.752,
+            "se": 0.5972174299487064,
+            "interval95": [
+              174.581475337128,
+              176.922524662872
+            ]
+          },
+          "challengerTradesPerReplay": {
+            "n": 250,
+            "mean": 251.792,
+            "se": 0.6432995267560034,
+            "interval95": [
+              250.53115608634118,
+              253.05284391365882
+            ]
+          },
+          "challengerTurnoverPer1000Bars": {
+            "n": 250,
+            "mean": 209.8266666666666,
+            "se": 0.5360829389633361,
+            "interval95": [
+              208.77596340528427,
+              210.87736992804892
+            ]
+          },
+          "championTurnoverPer1000Bars": {
+            "n": 250,
+            "mean": 146.46,
+            "se": 0.4976811916239222,
+            "interval95": [
+              145.48456278094002,
+              147.43543721906
+            ]
+          },
+          "challengerCostDragR": {
+            "n": 250,
+            "mean": 0.23736538675136562,
+            "se": 0.00255042272173092,
+            "interval95": [
+              0.232366650031991,
+              0.24236412347074024
+            ]
+          },
+          "championCostDragR": {
+            "n": 250,
+            "mean": 0.21834970813307275,
+            "se": 0.0023669200920977598,
+            "interval95": [
+              0.21371062996168447,
+              0.22298878630446103
+            ]
+          },
+          "challengerWinRate": {
+            "n": 250,
+            "mean": 0.42740090612434983,
+            "se": 0.0022409433838917153,
+            "interval95": [
+              0.4230087377658839,
+              0.4317930744828158
+            ]
+          },
+          "championWinRate": {
+            "n": 250,
+            "mean": 0.37376606579531946,
+            "se": 0.0022770530128681517,
+            "interval95": [
+              0.3693031238640063,
+              0.3782290077266326
+            ]
+          },
+          "reversalPrecision": {
+            "n": 250,
+            "mean": 0.0071641343100197225,
+            "se": 0.00040640952082525417,
+            "interval95": [
+              0.006367586279944974,
+              0.00796068234009447
+            ]
+          },
+          "reversalRecall": {
+            "n": 250,
+            "mean": 0.663,
+            "se": 0.02949923421509623,
+            "interval95": [
+              0.6051825629108432,
+              0.7208174370891569
+            ]
+          },
+          "reversalFalseAlarmShare": {
+            "n": 250,
+            "mean": 0.6569733521260918,
+            "se": 0.028581617233545197,
+            "interval95": [
+              0.6009544112865636,
+              0.71299229296562
+            ]
+          },
+          "commonOpportunityAuc": {
+            "n": 250,
+            "mean": 0.4983984150058084,
+            "se": 0.002830757510205263,
+            "interval95": [
+              0.49285023219307644,
+              0.5039465978185403
+            ]
+          },
+          "abstentionWinRateDelta": {
+            "n": 250,
+            "mean": -0.0027742482558944857,
+            "se": 0.008639689582203215,
+            "interval95": [
+              -0.01970772880818783,
+              0.014159232296398858
+            ]
+          }
+        }
+      },
+      {
+        "instrument": "GBPUSD",
+        "scenario": "EDGE_ZERO",
+        "costModel": "frozen broker-calibrated (spread 0.8 pip, commission $3/lot/side, slippage 0.1 pip, swap -0.55/lot/night)",
+        "aggregate": {
+          "replays": 250,
+          "championNetR": {
+            "n": 250,
+            "mean": -0.25682603377573426,
+            "se": 0.005805515814172464,
+            "interval95": [
+              -0.26820463577294296,
+              -0.24544743177852554
+            ]
+          },
+          "challengerNetR": {
+            "n": 250,
+            "mean": -0.2959462170716284,
+            "se": 0.0031049315293143003,
+            "interval95": [
+              -0.30203177109154933,
+              -0.28986066305170743
+            ]
+          },
+          "pairedDeltaNetR": {
+            "n": 250,
+            "mean": -0.03912018329589426,
+            "se": 0.004731439755434444,
+            "interval95": [
+              -0.04839363488471458,
+              -0.02984673170707395
+            ]
+          },
+          "championTradesPerReplay": {
+            "n": 250,
+            "mean": 177.292,
+            "se": 0.5697837820023764,
+            "interval95": [
+              176.1752442994915,
+              178.4087557005085
+            ]
+          },
+          "challengerTradesPerReplay": {
+            "n": 250,
+            "mean": 252.388,
+            "se": 0.6077592526954632,
+            "interval95": [
+              251.19681374405,
+              253.57918625595002
+            ]
+          },
+          "challengerTurnoverPer1000Bars": {
+            "n": 250,
+            "mean": 210.32333333333332,
+            "se": 0.5064660439128857,
+            "interval95": [
+              209.33067812004165,
+              211.315988546625
+            ]
+          },
+          "championTurnoverPer1000Bars": {
+            "n": 250,
+            "mean": 147.7433333333334,
+            "se": 0.4748198183353136,
+            "interval95": [
+              146.81270358290965,
+              148.67396308375714
+            ]
+          },
+          "challengerCostDragR": {
+            "n": 250,
+            "mean": 0.274344183791856,
+            "se": 0.00028471619469799185,
+            "interval95": [
+              0.27378615030003095,
+              0.274902217283681
+            ]
+          },
+          "championCostDragR": {
+            "n": 250,
+            "mean": 0.25279443562229675,
+            "se": 0.0002735184273348956,
+            "interval95": [
+              0.25225834935138375,
+              0.25333052189320976
+            ]
+          },
+          "challengerWinRate": {
+            "n": 250,
+            "mean": 0.39828435754514435,
+            "se": 0.0019068171624191939,
+            "interval95": [
+              0.3945470645522206,
+              0.4020216505380681
+            ]
+          },
+          "championWinRate": {
+            "n": 250,
+            "mean": 0.3589900551294828,
+            "se": 0.0022143290266275904,
+            "interval95": [
+              0.35465004995313765,
+              0.36333006030582793
+            ]
+          },
+          "reversalPrecision": {
+            "n": 250,
+            "mean": 0,
+            "se": 0,
+            "interval95": [
+              0,
+              0
+            ]
+          },
+          "reversalRecall": {
+            "n": 250,
+            "mean": 0,
+            "se": 0,
+            "interval95": [
+              0,
+              0
+            ]
+          },
+          "reversalFalseAlarmShare": {
+            "n": 250,
+            "mean": 0,
+            "se": 0,
+            "interval95": [
+              0,
+              0
+            ]
+          },
+          "commonOpportunityAuc": {
+            "n": 250,
+            "mean": 0.5023899636191252,
+            "se": 0.0030056894916989487,
+            "interval95": [
+              0.496498920420217,
+              0.5082810068180335
+            ]
+          },
+          "abstentionWinRateDelta": {
+            "n": 250,
+            "mean": 0.0049654240126924066,
+            "se": 0.009255351105307045,
+            "interval95": [
+              -0.013174730961069612,
+              0.023105578986454423
+            ]
+          }
+        }
+      },
+      {
+        "instrument": "GBPUSD",
+        "scenario": "REVERSION",
+        "costModel": "frozen broker-calibrated (spread 0.8 pip, commission $3/lot/side, slippage 0.1 pip, swap -0.55/lot/night)",
+        "aggregate": {
+          "replays": 250,
+          "championNetR": {
+            "n": 250,
+            "mean": -0.3582649071185607,
+            "se": 0.004896998137540345,
+            "interval95": [
+              -0.3678628471762068,
+              -0.34866696706091455
+            ]
+          },
+          "challengerNetR": {
+            "n": 250,
+            "mean": -0.3384614318168317,
+            "se": 0.002935866013845343,
+            "interval95": [
+              -0.34421562351279206,
+              -0.33270724012087133
+            ]
+          },
+          "pairedDeltaNetR": {
+            "n": 250,
+            "mean": 0.019803475301728535,
+            "se": 0.003873405931357268,
+            "interval95": [
+              0.012211739118881819,
+              0.02739521148457525
+            ]
+          },
+          "championTradesPerReplay": {
+            "n": 250,
+            "mean": 175.108,
+            "se": 0.5504592314257681,
+            "interval95": [
+              174.02911972293782,
+              176.1868802770622
+            ]
+          },
+          "challengerTradesPerReplay": {
+            "n": 250,
+            "mean": 249.84,
+            "se": 0.5525784757729439,
+            "interval95": [
+              248.75696608031015,
+              250.92303391968986
+            ]
+          },
+          "challengerTurnoverPer1000Bars": {
+            "n": 250,
+            "mean": 208.20000000000005,
+            "se": 0.4604820631441202,
+            "interval95": [
+              207.29747173359183,
+              209.10252826640826
+            ]
+          },
+          "championTurnoverPer1000Bars": {
+            "n": 250,
+            "mean": 145.92333333333337,
+            "se": 0.45871602618813967,
+            "interval95": [
+              145.02426643578156,
+              146.8224002308852
+            ]
+          },
+          "challengerCostDragR": {
+            "n": 250,
+            "mean": 0.2744207066779582,
+            "se": 0.0002658658791267475,
+            "interval95": [
+              0.27389961912604144,
+              0.27494179422987497
+            ]
+          },
+          "championCostDragR": {
+            "n": 250,
+            "mean": 0.25241296182022416,
+            "se": 0.00023524610315762265,
+            "interval95": [
+              0.25195188792689494,
+              0.2528740357135534
+            ]
+          },
+          "challengerWinRate": {
+            "n": 250,
+            "mean": 0.3758739593652275,
+            "se": 0.0017788562322106597,
+            "interval95": [
+              0.37238746518891896,
+              0.379360453541536
+            ]
+          },
+          "championWinRate": {
+            "n": 250,
+            "mean": 0.3198248393603416,
+            "se": 0.0018761846681360492,
+            "interval95": [
+              0.31614758495344303,
+              0.3235020937672402
+            ]
+          },
+          "reversalPrecision": {
+            "n": 250,
+            "mean": 0,
+            "se": 0,
+            "interval95": [
+              0,
+              0
+            ]
+          },
+          "reversalRecall": {
+            "n": 250,
+            "mean": 0,
+            "se": 0,
+            "interval95": [
+              0,
+              0
+            ]
+          },
+          "reversalFalseAlarmShare": {
+            "n": 250,
+            "mean": 0,
+            "se": 0,
+            "interval95": [
+              0,
+              0
+            ]
+          },
+          "commonOpportunityAuc": {
+            "n": 250,
+            "mean": 0.4741500924590826,
+            "se": 0.002691008317209957,
+            "interval95": [
+              0.4688758130336505,
+              0.47942437188451464
+            ]
+          },
+          "abstentionWinRateDelta": {
+            "n": 250,
+            "mean": 0.03061865687208449,
+            "se": 0.008754097257661488,
+            "interval95": [
+              0.013460941394569246,
+              0.047776372349599736
+            ]
+          }
+        }
+      },
+      {
+        "instrument": "GBPUSD",
+        "scenario": "PLANTED_DRIFT",
+        "costModel": "frozen broker-calibrated (spread 0.8 pip, commission $3/lot/side, slippage 0.1 pip, swap -0.55/lot/night)",
+        "aggregate": {
+          "replays": 250,
+          "championNetR": {
+            "n": 250,
+            "mean": -0.1648976697305024,
+            "se": 0.0066422030535598486,
+            "interval95": [
+              -0.17791614859616978,
+              -0.15187919086483503
+            ]
+          },
+          "challengerNetR": {
+            "n": 250,
+            "mean": -0.2567730599601476,
+            "se": 0.003654110685890775,
+            "interval95": [
+              -0.26393498535650883,
+              -0.24961113456378636
+            ]
+          },
+          "pairedDeltaNetR": {
+            "n": 250,
+            "mean": -0.0918753902296451,
+            "se": 0.00454573747698285,
+            "interval95": [
+              -0.10078487203798231,
+              -0.08296590842130788
+            ]
+          },
+          "championTradesPerReplay": {
+            "n": 250,
+            "mean": 175.848,
+            "se": 0.5053961665273714,
+            "interval95": [
+              174.85744170786836,
+              176.83855829213167
+            ]
+          },
+          "challengerTradesPerReplay": {
+            "n": 250,
+            "mean": 257.284,
+            "se": 0.6595219882703294,
+            "interval95": [
+              255.99136064578173,
+              258.5766393542183
+            ]
+          },
+          "challengerTurnoverPer1000Bars": {
+            "n": 250,
+            "mean": 214.40333333333336,
+            "se": 0.5496016568919407,
+            "interval95": [
+              213.3261338714848,
+              215.48053279518192
+            ]
+          },
+          "championTurnoverPer1000Bars": {
+            "n": 250,
+            "mean": 146.53999999999994,
+            "se": 0.42116347210614263,
+            "interval95": [
+              145.7145347565569,
+              147.36546524344297
+            ]
+          },
+          "challengerCostDragR": {
+            "n": 250,
+            "mean": 0.27069757705048597,
+            "se": 0.0002886611471271888,
+            "interval95": [
+              0.27013181159391797,
+              0.271263342507054
+            ]
+          },
+          "championCostDragR": {
+            "n": 250,
+            "mean": 0.24888011516601588,
+            "se": 0.00026202692299370507,
+            "interval95": [
+              0.24836655182991746,
+              0.2493936785021143
+            ]
+          },
+          "challengerWinRate": {
+            "n": 250,
+            "mean": 0.4161065635831709,
+            "se": 0.002200328070635567,
+            "interval95": [
+              0.4117939997765357,
+              0.4204191273898061
+            ]
+          },
+          "championWinRate": {
+            "n": 250,
+            "mean": 0.3932271551994253,
+            "se": 0.002524708179986428,
+            "interval95": [
+              0.3882788180561464,
+              0.3981754923427042
+            ]
+          },
+          "reversalPrecision": {
+            "n": 250,
+            "mean": 0,
+            "se": 0,
+            "interval95": [
+              0,
+              0
+            ]
+          },
+          "reversalRecall": {
+            "n": 250,
+            "mean": 0,
+            "se": 0,
+            "interval95": [
+              0,
+              0
+            ]
+          },
+          "reversalFalseAlarmShare": {
+            "n": 250,
+            "mean": 0,
+            "se": 0,
+            "interval95": [
+              0,
+              0
+            ]
+          },
+          "commonOpportunityAuc": {
+            "n": 250,
+            "mean": 0.5023107935156744,
+            "se": 0.0029512758107040097,
+            "interval95": [
+              0.49652639917262376,
+              0.5080951878587251
+            ]
+          },
+          "abstentionWinRateDelta": {
+            "n": 250,
+            "mean": -0.01590061398809722,
+            "se": 0.007944079944730117,
+            "interval95": [
+              -0.03147072469289024,
+              -0.00033050328330420063
+            ]
+          }
+        }
+      }
+    ],
+    "replaysPerCell": 250,
+    "nBars": 1200,
+    "totalPairedReplays": 2000,
+    "note": "Per-cell means with normal-approximation 95% intervals across independent replays; cells with < 30 replays are typed refusals, never silently reported. Cells with null reversal fields have no directional ground truth (EDGE_ZERO/REVERSION/PLANTED_DRIFT)."
+  },
+  "walkForward": [
+    {
+      "instrument": "EURUSD",
+      "scenario": "TREND_REGIMES",
+      "seed": 4510001,
+      "nBars": 7200,
+      "folds": 6,
+      "foldResults": [
+        {
+          "fold": 0,
+          "fromBar": 0,
+          "toBar": 1200,
+          "championTrades": 170,
+          "challengerTrades": 239,
+          "championNetR": -52.77528996734707,
+          "challengerNetR": -83.32357034208728,
+          "pairedDeltaNetR": -30.54828037474021
+        },
+        {
+          "fold": 1,
+          "fromBar": 1200,
+          "toBar": 2400,
+          "championTrades": 165,
+          "challengerTrades": 243,
+          "championNetR": -32.97205424499247,
+          "challengerNetR": -37.99976820322697,
+          "pairedDeltaNetR": -5.0277139582345
+        },
+        {
+          "fold": 2,
+          "fromBar": 2400,
+          "toBar": 3600,
+          "championTrades": 186,
+          "challengerTrades": 247,
+          "championNetR": -81.10184004411765,
+          "challengerNetR": -110.89545779963287,
+          "pairedDeltaNetR": -29.793617755515214
+        },
+        {
+          "fold": 3,
+          "fromBar": 3600,
+          "toBar": 4800,
+          "championTrades": 186,
+          "challengerTrades": 263,
+          "championNetR": -53.90116998184118,
+          "challengerNetR": -101.80941294536429,
+          "pairedDeltaNetR": -47.90824296352311
+        },
+        {
+          "fold": 4,
+          "fromBar": 4800,
+          "toBar": 6000,
+          "championTrades": 170,
+          "challengerTrades": 248,
+          "championNetR": -34.54539340252563,
+          "challengerNetR": -59.191864342223056,
+          "pairedDeltaNetR": -24.646470939697423
+        },
+        {
+          "fold": 5,
+          "fromBar": 6000,
+          "toBar": 7200,
+          "championTrades": 170,
+          "challengerTrades": 239,
+          "championNetR": -45.74378812020898,
+          "challengerNetR": -56.25167794269979,
+          "pairedDeltaNetR": -10.50788982249081
+        }
+      ],
+      "cumulativeDeltaNetR": -148.4322158142013,
+      "cumulativeCurve": [
+        0,
+        -30.54828037474021,
+        -35.57599433297471,
+        -65.36961208848993,
+        -113.27785505201304,
+        -137.92432599171048,
+        -148.4322158142013
+      ],
+      "aggregateDelta": {
+        "n": 6,
+        "mean": null,
+        "interval95": null,
+        "refused": "E10_INSUFFICIENT_REPLAYS:<30 replays is not an estimable cell"
+      },
+      "leakageControl": "Chronological segmentation only; each fold is evaluated in order; positions are force-closed at fold boundaries; no parameter is re-fitted between folds (policies frozen) — this is a temporal-stability check, not a fitting procedure validation."
+    },
+    {
+      "instrument": "GBPUSD",
+      "scenario": "TREND_REGIMES",
+      "seed": 4520002,
+      "nBars": 7200,
+      "folds": 6,
+      "foldResults": [
+        {
+          "fold": 0,
+          "fromBar": 0,
+          "toBar": 1200,
+          "championTrades": 172,
+          "challengerTrades": 237,
+          "championNetR": -45.170120190358745,
+          "challengerNetR": -68.1172500094544,
+          "pairedDeltaNetR": -22.94712981909565
+        },
+        {
+          "fold": 1,
+          "fromBar": 1200,
+          "toBar": 2400,
+          "championTrades": 179,
+          "challengerTrades": 253,
+          "championNetR": -29.756044352058662,
+          "challengerNetR": -32.50000096301157,
+          "pairedDeltaNetR": -2.7439566109529103
+        },
+        {
+          "fold": 2,
+          "fromBar": 2400,
+          "toBar": 3600,
+          "championTrades": 180,
+          "challengerTrades": 253,
+          "championNetR": -26.60160808836275,
+          "challengerNetR": -65.29042700453934,
+          "pairedDeltaNetR": -38.68881891617659
+        },
+        {
+          "fold": 3,
+          "fromBar": 3600,
+          "toBar": 4800,
+          "championTrades": 177,
+          "challengerTrades": 246,
+          "championNetR": -4.269189652016826,
+          "challengerNetR": -26.632250862358553,
+          "pairedDeltaNetR": -22.363061210341726
+        },
+        {
+          "fold": 4,
+          "fromBar": 4800,
+          "toBar": 6000,
+          "championTrades": 174,
+          "challengerTrades": 250,
+          "championNetR": -34.377963867594495,
+          "challengerNetR": -40.339633765810376,
+          "pairedDeltaNetR": -5.961669898215881
+        },
+        {
+          "fold": 5,
+          "fromBar": 6000,
+          "toBar": 7200,
+          "championTrades": 181,
+          "challengerTrades": 272,
+          "championNetR": -23.157966445223643,
+          "challengerNetR": -46.48206515232744,
+          "pairedDeltaNetR": -23.3240987071038
+        }
+      ],
+      "cumulativeDeltaNetR": -116.02873516188656,
+      "cumulativeCurve": [
+        0,
+        -22.94712981909565,
+        -25.69108643004856,
+        -64.37990534622514,
+        -86.74296655656687,
+        -92.70463645478276,
+        -116.02873516188656
+      ],
+      "aggregateDelta": {
+        "n": 6,
+        "mean": null,
+        "interval95": null,
+        "refused": "E10_INSUFFICIENT_REPLAYS:<30 replays is not an estimable cell"
+      },
+      "leakageControl": "Chronological segmentation only; each fold is evaluated in order; positions are force-closed at fold boundaries; no parameter is re-fitted between folds (policies frozen) — this is a temporal-stability check, not a fitting procedure validation."
+    }
+  ],
+  "ablations": {
+    "winnerTruncation": {
+      "channel": "WIN_TRUNCATION",
+      "question": "Does the retention ladder truncate winners prematurely? How much MFE capture and net expectancy shift with tighter/looser locks and with no ladder at all?",
+      "arms": [
+        {
+          "arm": "tighter-lock (retain -0.10)",
+          "armKind": "EXIT_PRESET",
+          "armDetail": "retain bands shifted by -0.1",
+          "replays": 250,
+          "tradesPerReplay": {
+            "n": 250,
+            "mean": 249.396,
+            "se": 0.5864575567451186,
+            "interval95": [
+              248.2465643012516,
+              250.54543569874838
+            ]
+          },
+          "meanNetR": {
+            "n": 250,
+            "mean": -0.29848822101183914,
+            "se": 0.004694038190975295,
+            "interval95": [
+              -0.30768836688077583,
+              -0.28928807514290245
+            ]
+          },
+          "meanGrossR": {
+            "n": 250,
+            "mean": -0.015777016386644162,
+            "se": 0.0034831634301424703,
+            "interval95": [
+              -0.022603891315839918,
+              -0.008950141457448406
+            ]
+          },
+          "meanCostR": {
+            "n": 250,
+            "mean": 0.2827112046251951,
+            "se": 0.003010689048635952,
+            "interval95": [
+              0.2768103624746744,
+              0.28861204677571584
+            ]
+          },
+          "meanCapture": {
+            "n": 250,
+            "mean": 0.10861577586113128,
+            "se": 0.009615142151775316,
+            "interval95": [
+              0.08977044338876912,
+              0.12746110833349344
+            ]
+          },
+          "winTruncationPerWinner": {
+            "n": 250,
+            "mean": 3.002556769631159,
+            "se": 0.016558219578841675,
+            "interval95": [
+              2.970103255352534,
+              3.035010283909784
+            ]
+          },
+          "winRate": {
+            "n": 250,
+            "mean": 0.4012706564127181,
+            "se": 0.00230636125545431,
+            "interval95": [
+              0.39675027138103286,
+              0.4057910414444033
+            ]
+          }
+        },
+        {
+          "arm": "frozen pre-registered preset",
+          "armKind": "EXIT_PRESET",
+          "armDetail": "retain bands shifted by 0",
+          "replays": 250,
+          "tradesPerReplay": {
+            "n": 250,
+            "mean": 253.704,
+            "se": 0.6155951311225968,
+            "interval95": [
+              252.49745570442442,
+              254.9105442955756
+            ]
+          },
+          "meanNetR": {
+            "n": 250,
+            "mean": -0.30019011854795896,
+            "se": 0.004545550467258996,
+            "interval95": [
+              -0.30909923382396975,
+              -0.29128100327194817
+            ]
+          },
+          "meanGrossR": {
+            "n": 250,
+            "mean": -0.017130195948728305,
+            "se": 0.0033669994540613942,
+            "interval95": [
+              -0.02372939366670829,
+              -0.01053099823074832
+            ]
+          },
+          "meanCostR": {
+            "n": 250,
+            "mean": 0.28305992259923074,
+            "se": 0.0030125704965773947,
+            "interval95": [
+              0.2771553928784769,
+              0.2889644523199846
+            ]
+          },
+          "meanCapture": {
+            "n": 250,
+            "mean": 0.16726197633700549,
+            "se": 0.009475895156500894,
+            "interval95": [
+              0.14868956296248936,
+              0.1858343897115216
+            ]
+          },
+          "winTruncationPerWinner": {
+            "n": 250,
+            "mean": 3.0017199112967505,
+            "se": 0.0164814615122674,
+            "interval95": [
+              2.9694168400653207,
+              3.0340229825281804
+            ]
+          },
+          "winRate": {
+            "n": 250,
+            "mean": 0.40227804485661267,
+            "se": 0.002291676703870154,
+            "interval95": [
+              0.3977864410173885,
+              0.4067696486958368
+            ]
+          }
+        },
+        {
+          "arm": "looser-lock (retain +0.10)",
+          "armKind": "EXIT_PRESET",
+          "armDetail": "retain bands shifted by 0.1",
+          "replays": 250,
+          "tradesPerReplay": {
+            "n": 250,
+            "mean": 257.644,
+            "se": 0.6287530337978815,
+            "interval95": [
+              256.41166668886535,
+              258.87633331113466
+            ]
+          },
+          "meanNetR": {
+            "n": 250,
+            "mean": -0.29772848817447206,
+            "se": 0.00443839545103274,
+            "interval95": [
+              -0.30642758347626,
+              -0.28902939287268414
+            ]
+          },
+          "meanGrossR": {
+            "n": 250,
+            "mean": -0.014429967943956045,
+            "se": 0.0032412609870804505,
+            "interval95": [
+              -0.020782722793238194,
+              -0.008077213094673897
+            ]
+          },
+          "meanCostR": {
+            "n": 250,
+            "mean": 0.28329852023051594,
+            "se": 0.0030146953458698176,
+            "interval95": [
+              0.27738982588164357,
+              0.2892072145793883
+            ]
+          },
+          "meanCapture": {
+            "n": 250,
+            "mean": 0.22524542647599355,
+            "se": 0.009725379079381712,
+            "interval95": [
+              0.20618403359405224,
+              0.24430681935793486
+            ]
+          },
+          "winTruncationPerWinner": {
+            "n": 250,
+            "mean": 2.992074880908988,
+            "se": 0.015778914567492745,
+            "interval95": [
+              2.9611487763976267,
+              3.0230009854203495
+            ]
+          },
+          "winRate": {
+            "n": 250,
+            "mean": 0.4186789142407988,
+            "se": 0.0023287651864944995,
+            "interval95": [
+              0.41411461831081625,
+              0.4232432101707813
+            ]
+          }
+        },
+        {
+          "arm": "no-ladder (hard stop/target only)",
+          "armKind": "EXIT_PRESET",
+          "armDetail": "lock arm moved beyond the 1.6R target (never arms), rescue equally unreachable, drawdown guard off, time stop effectively off — winners ride to the hard target, losers to the hard stop",
+          "replays": 250,
+          "tradesPerReplay": {
+            "n": 250,
+            "mean": 174.26,
+            "se": 0.5320884064600138,
+            "interval95": [
+              173.217125878521,
+              175.302874121479
+            ]
+          },
+          "meanNetR": {
+            "n": 250,
+            "mean": -0.2674182994239288,
+            "se": 0.006481327002484571,
+            "interval95": [
+              -0.28012146702102647,
+              -0.25471513182683114
+            ]
+          },
+          "meanGrossR": {
+            "n": 250,
+            "mean": 0.005950015149507616,
+            "se": 0.005620900033753052,
+            "interval95": [
+              -0.005066746564247151,
+              0.01696677686326238
+            ]
+          },
+          "meanCostR": {
+            "n": 250,
+            "mean": 0.27336831457343647,
+            "se": 0.0028704463140852075,
+            "interval95": [
+              0.2677423431338968,
+              0.27899428601297616
+            ]
+          },
+          "meanCapture": {
+            "n": 250,
+            "mean": -0.2972274679536467,
+            "se": 0.011229747769819328,
+            "interval95": [
+              -0.31923736931157287,
+              -0.2752175665957205
+            ]
+          },
+          "winTruncationPerWinner": {
+            "n": 250,
+            "mean": 2.6908842069228713,
+            "se": 0.017764960035618622,
+            "interval95": [
+              2.6560655247916203,
+              2.7257028890541224
+            ]
+          },
+          "winRate": {
+            "n": 250,
+            "mean": 0.3269712483517036,
+            "se": 0.0023312495351861164,
+            "interval95": [
+              0.32240208318772207,
+              0.33154041351568514
+            ]
+          }
+        }
+      ],
+      "discipline": "Experimental arms; frozen preset never modified; results inform understanding only — no arm is promoted."
+    },
+    "turnover": {
+      "channel": "TURNOVER",
+      "question": "How do trade counts (turnover), net expectancy and cost drag respond to the entry gate and the abstention floor? Is current turnover excessive relative to its edge?",
+      "arms": [
+        {
+          "arm": "entry gate 0.50",
+          "armKind": "ENTRY_GATE",
+          "armDetail": "more entries",
+          "replays": 250,
+          "tradesPerReplay": {
+            "n": 250,
+            "mean": 329.4,
+            "se": 0.8753656722998477,
+            "interval95": [
+              327.6843147954565,
+              331.11568520454347
+            ]
+          },
+          "meanNetR": {
+            "n": 250,
+            "mean": -0.30049345688402085,
+            "se": 0.004107114087390859,
+            "interval95": [
+              -0.3085432526391998,
+              -0.2924436611288419
+            ]
+          },
+          "meanGrossR": {
+            "n": 250,
+            "mean": -0.0167628314034332,
+            "se": 0.0029449686950666324,
+            "interval95": [
+              -0.022534864026890776,
+              -0.010990798779975622
+            ]
+          },
+          "meanCostR": {
+            "n": 250,
+            "mean": 0.28373062548058753,
+            "se": 0.00300028557744442,
+            "interval95": [
+              0.2778501737590773,
+              0.2896110772020978
+            ]
+          },
+          "meanCapture": {
+            "n": 250,
+            "mean": 0.17465430661420375,
+            "se": 0.00834889787177585,
+            "interval95": [
+              0.15829076734584646,
+              0.19101784588256104
+            ]
+          },
+          "winTruncationPerWinner": {
+            "n": 250,
+            "mean": 3.009738105821134,
+            "se": 0.015057926689097832,
+            "interval95": [
+              2.980225111595863,
+              3.039251100046405
+            ]
+          },
+          "winRate": {
+            "n": 250,
+            "mean": 0.4002559276479422,
+            "se": 0.0022042328955557745,
+            "interval95": [
+              0.3959357105250371,
+              0.4045761447708473
+            ]
+          }
+        },
+        {
+          "arm": "entry gate 0.6 (frozen)",
+          "armKind": "ENTRY_GATE",
+          "armDetail": "pre-registered gate",
+          "replays": 250,
+          "tradesPerReplay": {
+            "n": 250,
+            "mean": 253.704,
+            "se": 0.6155951311225968,
+            "interval95": [
+              252.49745570442442,
+              254.9105442955756
+            ]
+          },
+          "meanNetR": {
+            "n": 250,
+            "mean": -0.30019011854795896,
+            "se": 0.004545550467258996,
+            "interval95": [
+              -0.30909923382396975,
+              -0.29128100327194817
+            ]
+          },
+          "meanGrossR": {
+            "n": 250,
+            "mean": -0.017130195948728305,
+            "se": 0.0033669994540613942,
+            "interval95": [
+              -0.02372939366670829,
+              -0.01053099823074832
+            ]
+          },
+          "meanCostR": {
+            "n": 250,
+            "mean": 0.28305992259923074,
+            "se": 0.0030125704965773947,
+            "interval95": [
+              0.2771553928784769,
+              0.2889644523199846
+            ]
+          },
+          "meanCapture": {
+            "n": 250,
+            "mean": 0.16726197633700549,
+            "se": 0.009475895156500894,
+            "interval95": [
+              0.14868956296248936,
+              0.1858343897115216
+            ]
+          },
+          "winTruncationPerWinner": {
+            "n": 250,
+            "mean": 3.0017199112967505,
+            "se": 0.0164814615122674,
+            "interval95": [
+              2.9694168400653207,
+              3.0340229825281804
+            ]
+          },
+          "winRate": {
+            "n": 250,
+            "mean": 0.40227804485661267,
+            "se": 0.002291676703870154,
+            "interval95": [
+              0.3977864410173885,
+              0.4067696486958368
+            ]
+          }
+        },
+        {
+          "arm": "entry gate 0.70",
+          "armKind": "ENTRY_GATE",
+          "armDetail": "fewer entries",
+          "replays": 250,
+          "tradesPerReplay": {
+            "n": 250,
+            "mean": 145.26,
+            "se": 1.6480344871035713,
+            "interval95": [
+              142.02991173451852,
+              148.49008826548146
+            ]
+          },
+          "meanNetR": {
+            "n": 250,
+            "mean": -0.2987204943372352,
+            "se": 0.005420582415661535,
+            "interval95": [
+              -0.30934464073096485,
+              -0.2880963479435055
+            ]
+          },
+          "meanGrossR": {
+            "n": 250,
+            "mean": -0.017824120676664938,
+            "se": 0.004403723792876008,
+            "interval95": [
+              -0.02645526077664537,
+              -0.009192980576684506
+            ]
+          },
+          "meanCostR": {
+            "n": 250,
+            "mean": 0.2808963736605703,
+            "se": 0.0031243966608264966,
+            "interval95": [
+              0.27477266868363015,
+              0.28702007863751045
+            ]
+          },
+          "meanCapture": {
+            "n": 250,
+            "mean": 0.15652224953835825,
+            "se": 0.011873751270759412,
+            "interval95": [
+              0.13325012450271556,
+              0.17979437457400094
+            ]
+          },
+          "winTruncationPerWinner": {
+            "n": 250,
+            "mean": 3.0202913599431143,
+            "se": 0.022085692173541515,
+            "interval95": [
+              2.977004198367891,
+              3.0635785215183375
+            ]
+          },
+          "winRate": {
+            "n": 250,
+            "mean": 0.4021652130737812,
+            "se": 0.002739142616573022,
+            "interval95": [
+              0.3967965921544323,
+              0.40753383399313015
+            ]
+          }
+        },
+        {
+          "arm": "entry gate 0.80",
+          "armKind": "ENTRY_GATE",
+          "armDetail": "much fewer entries",
+          "replays": 250,
+          "tradesPerReplay": {
+            "n": 250,
+            "mean": 66.872,
+            "se": 1.6615950337627101,
+            "interval95": [
+              63.6153335512463,
+              70.12866644875369
+            ]
+          },
+          "meanNetR": {
+            "n": 250,
+            "mean": -0.29854419775716395,
+            "se": 0.008045420429268249,
+            "interval95": [
+              -0.3143129321633943,
+              -0.2827754633509336
+            ]
+          },
+          "meanGrossR": {
+            "n": 250,
+            "mean": -0.019489649149715176,
+            "se": 0.007097557086907778,
+            "interval95": [
+              -0.03340060552799929,
+              -0.005578692771431059
+            ]
+          },
+          "meanCostR": {
+            "n": 250,
+            "mean": 0.27905454860744855,
+            "se": 0.0035642316855010823,
+            "interval95": [
+              0.2720687828162071,
+              0.28604031439869
+            ]
+          },
+          "meanCapture": {
+            "n": 250,
+            "mean": 0.15638007611312402,
+            "se": 0.02066211499211945,
+            "interval95": [
+              0.11588307456470961,
+              0.19687707766153842
+            ]
+          },
+          "winTruncationPerWinner": {
+            "n": 250,
+            "mean": 3.072463868590565,
+            "se": 0.04024018126719403,
+            "interval95": [
+              2.9935945619533904,
+              3.15133317522774
+            ]
+          },
+          "winRate": {
+            "n": 250,
+            "mean": 0.40543713754410937,
+            "se": 0.004520659048368202,
+            "interval95": [
+              0.39657680855303346,
+              0.4142974665351853
+            ]
+          }
+        },
+        {
+          "arm": "confidence floor 0.45",
+          "armKind": "CONFIDENCE_FLOOR",
+          "armDetail": "weaker abstention",
+          "replays": 250,
+          "tradesPerReplay": {
+            "n": 250,
+            "mean": 253.704,
+            "se": 0.6155951311225968,
+            "interval95": [
+              252.49745570442442,
+              254.9105442955756
+            ]
+          },
+          "meanNetR": {
+            "n": 250,
+            "mean": -0.30019011854795896,
+            "se": 0.004545550467258996,
+            "interval95": [
+              -0.30909923382396975,
+              -0.29128100327194817
+            ]
+          },
+          "meanGrossR": {
+            "n": 250,
+            "mean": -0.017130195948728305,
+            "se": 0.0033669994540613942,
+            "interval95": [
+              -0.02372939366670829,
+              -0.01053099823074832
+            ]
+          },
+          "meanCostR": {
+            "n": 250,
+            "mean": 0.28305992259923074,
+            "se": 0.0030125704965773947,
+            "interval95": [
+              0.2771553928784769,
+              0.2889644523199846
+            ]
+          },
+          "meanCapture": {
+            "n": 250,
+            "mean": 0.16726197633700549,
+            "se": 0.009475895156500894,
+            "interval95": [
+              0.14868956296248936,
+              0.1858343897115216
+            ]
+          },
+          "winTruncationPerWinner": {
+            "n": 250,
+            "mean": 3.0017199112967505,
+            "se": 0.0164814615122674,
+            "interval95": [
+              2.9694168400653207,
+              3.0340229825281804
+            ]
+          },
+          "winRate": {
+            "n": 250,
+            "mean": 0.40227804485661267,
+            "se": 0.002291676703870154,
+            "interval95": [
+              0.3977864410173885,
+              0.4067696486958368
+            ]
+          }
+        },
+        {
+          "arm": "confidence floor 0.55 (frozen)",
+          "armKind": "CONFIDENCE_FLOOR",
+          "armDetail": "pre-registered floor",
+          "replays": 250,
+          "tradesPerReplay": {
+            "n": 250,
+            "mean": 253.704,
+            "se": 0.6155951311225968,
+            "interval95": [
+              252.49745570442442,
+              254.9105442955756
+            ]
+          },
+          "meanNetR": {
+            "n": 250,
+            "mean": -0.30019011854795896,
+            "se": 0.004545550467258996,
+            "interval95": [
+              -0.30909923382396975,
+              -0.29128100327194817
+            ]
+          },
+          "meanGrossR": {
+            "n": 250,
+            "mean": -0.017130195948728305,
+            "se": 0.0033669994540613942,
+            "interval95": [
+              -0.02372939366670829,
+              -0.01053099823074832
+            ]
+          },
+          "meanCostR": {
+            "n": 250,
+            "mean": 0.28305992259923074,
+            "se": 0.0030125704965773947,
+            "interval95": [
+              0.2771553928784769,
+              0.2889644523199846
+            ]
+          },
+          "meanCapture": {
+            "n": 250,
+            "mean": 0.16726197633700549,
+            "se": 0.009475895156500894,
+            "interval95": [
+              0.14868956296248936,
+              0.1858343897115216
+            ]
+          },
+          "winTruncationPerWinner": {
+            "n": 250,
+            "mean": 3.0017199112967505,
+            "se": 0.0164814615122674,
+            "interval95": [
+              2.9694168400653207,
+              3.0340229825281804
+            ]
+          },
+          "winRate": {
+            "n": 250,
+            "mean": 0.40227804485661267,
+            "se": 0.002291676703870154,
+            "interval95": [
+              0.3977864410173885,
+              0.4067696486958368
+            ]
+          }
+        },
+        {
+          "arm": "confidence floor 0.65",
+          "armKind": "CONFIDENCE_FLOOR",
+          "armDetail": "stronger abstention",
+          "replays": 250,
+          "tradesPerReplay": {
+            "n": 250,
+            "mean": 227.08,
+            "se": 1.2809534601492256,
+            "interval95": [
+              224.56937733243208,
+              229.59062266756794
+            ]
+          },
+          "meanNetR": {
+            "n": 250,
+            "mean": -0.3090258078145059,
+            "se": 0.004562891510207912,
+            "interval95": [
+              -0.317968910910419,
+              -0.3000827047185928
+            ]
+          },
+          "meanGrossR": {
+            "n": 250,
+            "mean": -0.01834399747294359,
+            "se": 0.003496914424635345,
+            "interval95": [
+              -0.02519782385630958,
+              -0.011490171089577603
+            ]
+          },
+          "meanCostR": {
+            "n": 250,
+            "mean": 0.29068181034156243,
+            "se": 0.0028585608104355104,
+            "interval95": [
+              0.285079134061298,
+              0.2962844866218269
+            ]
+          },
+          "meanCapture": {
+            "n": 250,
+            "mean": 0.16369123568438942,
+            "se": 0.009918494013064914,
+            "interval95": [
+              0.14425134448456667,
+              0.18313112688421218
+            ]
+          },
+          "winTruncationPerWinner": {
+            "n": 250,
+            "mean": 3.0109323431090447,
+            "se": 0.01725348329420091,
+            "interval95": [
+              2.9771161369778096,
+              3.0447485492402797
+            ]
+          },
+          "winRate": {
+            "n": 250,
+            "mean": 0.3988579040610912,
+            "se": 0.002364866948909226,
+            "interval95": [
+              0.39422284997643925,
+              0.4034929581457431
+            ]
+          }
+        }
+      ],
+      "discipline": "Experimental arms; frozen policy never modified; results inform understanding only — no arm is promoted."
+    },
+    "costDrag": {
+      "channel": "COST_DRAG",
+      "question": "How much of the net expectancy is consumed by transaction costs, and how does net scale as costs double?",
+      "arms": [
+        {
+          "arm": "cost x0.5",
+          "armKind": "COST_MODEL",
+          "armDetail": "spread/commission/slippage multiplied by 0.5",
+          "replays": 250,
+          "tradesPerReplay": {
+            "n": 250,
+            "mean": 253.096,
+            "se": 0.6025874063812793,
+            "interval95": [
+              251.91495037663933,
+              254.27704962336068
+            ]
+          },
+          "meanNetR": {
+            "n": 250,
+            "mean": -0.2453409291853872,
+            "se": 0.004203336958289772,
+            "interval95": [
+              -0.25357931830350466,
+              -0.23710254006726975
+            ]
+          },
+          "meanGrossR": {
+            "n": 250,
+            "mean": -0.016726057609046052,
+            "se": 0.003428979101002273,
+            "interval95": [
+              -0.023446733203762872,
+              -0.010005382014329232
+            ]
+          },
+          "meanCostR": {
+            "n": 250,
+            "mean": 0.22861487157634108,
+            "se": 0.002433304604735192,
+            "interval95": [
+              0.22384568215002587,
+              0.2333840610026563
+            ]
+          },
+          "meanCapture": {
+            "n": 250,
+            "mean": 0.12671065510727952,
+            "se": 0.008841671896004561,
+            "interval95": [
+              0.10938129649129884,
+              0.1440400137232602
+            ]
+          },
+          "winTruncationPerWinner": {
+            "n": 250,
+            "mean": 2.884040886559753,
+            "se": 0.01539657747971034,
+            "interval95": [
+              2.8538641489763097,
+              2.914217624143196
+            ]
+          },
+          "winRate": {
+            "n": 250,
+            "mean": 0.4281635387640865,
+            "se": 0.0022285279172899177,
+            "interval95": [
+              0.4237957042732033,
+              0.43253137325496976
+            ]
+          }
+        },
+        {
+          "arm": "cost x1.0",
+          "armKind": "COST_MODEL",
+          "armDetail": "spread/commission/slippage multiplied by 1",
+          "replays": 250,
+          "tradesPerReplay": {
+            "n": 250,
+            "mean": 253.704,
+            "se": 0.6155951311225968,
+            "interval95": [
+              252.49745570442442,
+              254.9105442955756
+            ]
+          },
+          "meanNetR": {
+            "n": 250,
+            "mean": -0.30019011854795896,
+            "se": 0.004545550467258996,
+            "interval95": [
+              -0.30909923382396975,
+              -0.29128100327194817
+            ]
+          },
+          "meanGrossR": {
+            "n": 250,
+            "mean": -0.017130195948728305,
+            "se": 0.0033669994540613942,
+            "interval95": [
+              -0.02372939366670829,
+              -0.01053099823074832
+            ]
+          },
+          "meanCostR": {
+            "n": 250,
+            "mean": 0.28305992259923074,
+            "se": 0.0030125704965773947,
+            "interval95": [
+              0.2771553928784769,
+              0.2889644523199846
+            ]
+          },
+          "meanCapture": {
+            "n": 250,
+            "mean": 0.16726197633700549,
+            "se": 0.009475895156500894,
+            "interval95": [
+              0.14868956296248936,
+              0.1858343897115216
+            ]
+          },
+          "winTruncationPerWinner": {
+            "n": 250,
+            "mean": 3.0017199112967505,
+            "se": 0.0164814615122674,
+            "interval95": [
+              2.9694168400653207,
+              3.0340229825281804
+            ]
+          },
+          "winRate": {
+            "n": 250,
+            "mean": 0.40227804485661267,
+            "se": 0.002291676703870154,
+            "interval95": [
+              0.3977864410173885,
+              0.4067696486958368
+            ]
+          }
+        },
+        {
+          "arm": "cost x1.5",
+          "armKind": "COST_MODEL",
+          "armDetail": "spread/commission/slippage multiplied by 1.5",
+          "replays": 250,
+          "tradesPerReplay": {
+            "n": 250,
+            "mean": 254.448,
+            "se": 0.631207474212725,
+            "interval95": [
+              253.21085607401213,
+              255.6851439259879
+            ]
+          },
+          "meanNetR": {
+            "n": 250,
+            "mean": -0.3540140498221017,
+            "se": 0.004896830671519705,
+            "interval95": [
+              -0.3636116616523762,
+              -0.34441643799182725
+            ]
+          },
+          "meanGrossR": {
+            "n": 250,
+            "mean": -0.016169552189721447,
+            "se": 0.0032703234358640817,
+            "interval95": [
+              -0.022579268392371357,
+              -0.009759835987071537
+            ]
+          },
+          "meanCostR": {
+            "n": 250,
+            "mean": 0.3378444976323802,
+            "se": 0.0035911485378488333,
+            "interval95": [
+              0.33080597577954385,
+              0.3448830194852166
+            ]
+          },
+          "meanCapture": {
+            "n": 250,
+            "mean": 0.2086752956281349,
+            "se": 0.009522214920652427,
+            "interval95": [
+              0.19001209718339326,
+              0.2273384940728765
+            ]
+          },
+          "winTruncationPerWinner": {
+            "n": 250,
+            "mean": 3.1218494769267253,
+            "se": 0.01758079549900834,
+            "interval95": [
+              3.0873917506573068,
+              3.156307203196144
+            ]
+          },
+          "winRate": {
+            "n": 250,
+            "mean": 0.3813663992733211,
+            "se": 0.0024130725766864235,
+            "interval95": [
+              0.3766368638936285,
+              0.38609593465301373
+            ]
+          }
+        },
+        {
+          "arm": "cost x2.0",
+          "armKind": "COST_MODEL",
+          "armDetail": "spread/commission/slippage multiplied by 2",
+          "replays": 250,
+          "tradesPerReplay": {
+            "n": 250,
+            "mean": 255.968,
+            "se": 0.6330615861727439,
+            "interval95": [
+              254.7272220813185,
+              257.20877791868145
+            ]
+          },
+          "meanNetR": {
+            "n": 250,
+            "mean": -0.40810683933770053,
+            "se": 0.00532808636924017,
+            "interval95": [
+              -0.41854969681030196,
+              -0.3976639818650991
+            ]
+          },
+          "meanGrossR": {
+            "n": 250,
+            "mean": -0.015561279315009141,
+            "se": 0.0032243665043597074,
+            "interval95": [
+              -0.02188092158636001,
+              -0.009241637043658272
+            ]
+          },
+          "meanCostR": {
+            "n": 250,
+            "mean": 0.3925455600226911,
+            "se": 0.004153935157351712,
+            "interval95": [
+              0.3844039966559474,
+              0.4006871233894348
+            ]
+          },
+          "meanCapture": {
+            "n": 250,
+            "mean": 0.2467244549357566,
+            "se": 0.010062829732844083,
+            "interval95": [
+              0.22700167092125256,
+              0.2664472389502606
+            ]
+          },
+          "winTruncationPerWinner": {
+            "n": 250,
+            "mean": 3.256509675169318,
+            "se": 0.01953513461161508,
+            "interval95": [
+              3.2182215145953985,
+              3.2947978357432377
+            ]
+          },
+          "winRate": {
+            "n": 250,
+            "mean": 0.3628117552334484,
+            "se": 0.002538323873190531,
+            "interval95": [
+              0.3578367318216544,
+              0.3677867786452424
+            ]
+          }
+        }
+      ],
+      "discipline": "Experimental arms on the frozen policy; costs are always charged in every arm; no arm is promoted and costs are never waived in any evaluation."
+    }
+  },
+  "independentReplayTotals": {
+    "nullReplays": 1000,
+    "matrixPairedReplays": 2000,
+    "ablationReplays": 3750,
+    "edgeTrialsPerTarget": 1000,
+    "walkForwardFoldReplays": 12
+  },
+  "seedDiscipline": "null=9xxxxxx (harness base); matrix=41xxxxx; walk-forward=45xxxxx; ablations=43xxxxx; final held-out evaluation family 47xxxxx is untouched by this campaign (no optimization against the held-out dataset; ablation arms are experimental and the frozen pre-registered challenger preset/policy is never modified).",
+  "constraintSemantics": "All markets synthetic; broker-calibrated costs always charged; champion side is the simplified S1 mirror (SIMPLIFIED_S1_MIRROR), not the deployed V1 Champion; the only actual-V1 datum is the broker-confirmed evidence window (E-7). Negative results are reported exactly as positive ones; no profitability claim is made or implied."
+}

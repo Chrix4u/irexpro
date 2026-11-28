@@ -206,9 +206,51 @@ predicate mirrors — plus the complete offline evaluation stack:
   200-replay artifact committed), known-edge detection power
   (binormal planting, recovered within stated uncertainty),
   exit-dominance attribution (>= 0.90 both controlled arms).
-- [ ] **E-10 (next)** Full 1,000+-replay null and edge campaigns on CI
-  hardware; multi-instrument campaigns; walk-forward variant of the
-  paired simulator.
+- [x] **E-10** Full 1,000+-replay null and edge campaigns; multi-instrument
+  campaigns; walk-forward variant of the paired simulator. Delivered
+  2026-11-28 → `v2-e10-campaign.cjs` + `v2-ablation-campaign.cjs` + CLI
+  `v2-e10-run.cjs` (+ tests, CI steps); full-scale artifact committed under
+  `runs/v2-e10-campaign-20261128/` (SHA-256 recorded). Verified: null
+  campaign 1,000 replays — FP champion 0 / challenger 0 / paired 0.01
+  (≤ nominal 5%); known-edge 1,000 trials per target — planted 0.55 →
+  measured 0.5511, detection 0.820; planted 0.60 → measured 0.6010,
+  detection 0.802 (predicted power 0.8); multi-instrument matrix EURUSD +
+  GBPUSD × {TREND_REGIMES, EDGE_ZERO, REVERSION, PLANTED_DRIFT} at 250
+  replays per cell (2,000 paired replays) with normal-approximation 95%
+  intervals and typed refusals below 30 replays; chronological walk-forward
+  variant (7,200 bars, 6 folds, both instruments; per-fold deltas and
+  cumulative curves; nothing re-fitted — temporal-stability semantics
+  documented). Controlled offline ablations (seed family 43xxxxx, disjoint
+  from E-10 families 41/45 and the untouched final held-out family 47xxxxx):
+  winner-truncation retention arms (tighter / frozen / looser / no-ladder),
+  turnover arms (entry gate 0.50/0.60/0.70/0.80, confidence floor
+  0.45/0.55/0.65), cost-drag arms (0.5×/1×/1.5×/2×) — 15 arms × 250 replays.
+  **Honest results (negative, reported as-is)**: challenger after-cost net
+  expectancy is negative in every matrix cell (−0.248 … −0.391 R/trade);
+  paired delta favors the challenger only on REVERSION cells (+0.016 /
+  +0.019) and disfavors it on TREND/EDGE_ZERO/PLANTED_DRIFT (up to
+  −0.092); every walk-forward fold for both instruments shows a negative
+  cumulative paired delta (EURUSD −148.4 R, GBPUSD −116.0 R); ablations
+  show net expectancy flat in the entry gate (−0.299…−0.300) and dominated
+  by transaction-cost drag (−0.245 → −0.408 R/trade as costs scale 0.5× →
+  2×). No arm is promoted; the frozen pre-registered preset/policy is
+  unchanged.
+- [x] **E-10m** Evaluation-methodology corrections (independent review,
+  2026-11-28) — delivered in `v2-offline-evaluation-harness.cjs` +
+  dashboard + tests: (a) reversal evaluation with strict one-to-one
+  event matching (repeated observations of an already-matched reversal
+  are counted as repeated, NOT as new true positives; false alarms vs
+  repeated observations distinguished; precision = TP/events, recall =
+  TP/points, median detection latency reported); (b) entry intelligence
+  evaluated on COMMON prediction opportunities with IDENTICAL outcome
+  definitions (fixed-horizon forward return sign on the both-registered
+  grid — exit-policy-free), with challenger-abstention selectivity
+  (taken vs abstained win rates, Newcombe CI); the settled-trade AUC is
+  retained but explicitly labeled exit-confounded secondary; (c) faithful
+  V1 comparison semantics: campaign outputs and dashboard now carry
+  `SIMPLIFIED_S1_MIRROR` labeling stating the paired campaign is NOT the
+  complete deployed V1 Champion, and the only actual-V1 datum is the
+  broker-confirmed evidence window.
 
 ## P2 — Evaluation harness (offline, synthetic)
 
@@ -216,28 +258,34 @@ predicate mirrors — plus the complete offline evaluation stack:
   known planted edge, zero edge, and adverse-selection scenarios) for
   campaign rehearsals. Acceptance: planted parameters recovered by the
   framework within stated uncertainty. Delivered → E-2 above.
-- [ ] **P2-2** Paired-engine simulation harness: Champion-shaped and
+- [x] **P2-2** Paired-engine simulation harness: Champion-shaped and
   Challenger-shaped policies evaluated on identical synthetic paths with
   identical costs. Acceptance: paired deltas have correct coverage in
-  Monte-Carlo rehearsal.
-- [ ] **P2-3** Attribution-ledger persistence adapter (research DB sandbox
+  Monte-Carlo rehearsal. Delivered → E-3 above (+ E-10 multi-instrument
+  matrix coverage with 95% intervals; walk-forward variant E-10).
+- [x] **P2-3** Attribution-ledger persistence adapter (research DB sandbox
   or file export — no production DB). Acceptance: round-trip integrity
-  tests.
-- [ ] **P2-4** Comparative dashboard read-only projection prototype on the
+  tests. Delivered → E-4 above.
+- [x] **P2-4** Comparative dashboard read-only projection prototype on the
   synthetic ledger (R6). Acceptance: projection cannot diverge from ledger
-  (single code path).
+  (single code path). Delivered → E-6 above.
 
 ## P3 — Synthetic campaigns
 
-- [ ] **P3-1** Null-discrimination campaign: verify the framework detects
+- [x] **P3-1** Null-discrimination campaign: verify the framework detects
   "no entry edge" at honest rates (false-positive rate ≤ nominal) across
-  ≥1,000 replays. Acceptance: size/level calibration report.
-- [ ] **P3-2** Known-edge detection campaign: planted AUC 0.55/0.60 edges
+  ≥1,000 replays. Acceptance: size/level calibration report. Delivered →
+  E-9 + E-10 (1,000-replay null campaign: FP champion 0, challenger 0,
+  paired 0.01).
+- [x] **P3-2** Known-edge detection campaign: planted AUC 0.55/0.60 edges
   detected at the pre-registered power. Acceptance: detection-power table
-  matches Hanley–McNeil predictions.
-- [ ] **P3-3** Exit-dominance campaign: planted win-truncation and
+  matches Hanley–McNeil predictions. Delivered → E-9 + E-10 (1,000 trials
+  per target: detection 0.820 / 0.802 vs predicted 0.80).
+- [x] **P3-3** Exit-dominance campaign: planted win-truncation and
   loss-extension scenarios; decomposition must attribute ≥90% of planted
   deficit to the correct channel. Acceptance: attribution accuracy report.
+  Delivered → E-9 (attribution share ≥ 0.9091 both controlled arms) +
+  ablation campaign E-10 (retention arms with uncertainty).
 
 ## P4 — Historical replay (BLOCKED: data authorization)
 

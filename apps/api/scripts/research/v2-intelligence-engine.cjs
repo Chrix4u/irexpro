@@ -25,6 +25,7 @@
 const {
   V2_CHALLENGER_EXIT_PRESET,
   applyEI1Policy,
+  validateEI1Policy,
 } = require('./v2-exit-intelligence-contract.cjs');
 
 const finiteNumber = (v) => typeof v === 'number' && Number.isFinite(v);
@@ -145,6 +146,31 @@ function createEnginePolicy(kind, config) {
     throw new Error('ENGINE_IDENTITY_RESEARCH_ONLY');
   }
   const pip = finiteNumber(cfg.pip) ? cfg.pip : 0.0001;
+  // Exit preset: the frozen pre-registered challenger preset by default.
+  // cfg.exitPreset is an EXPERIMENTAL ABLATION ARM ONLY (validated with the
+  // same typed EI-1 validator); it never modifies the frozen preset and is
+  // recorded as experimental in any campaign that uses it.
+  let exitPreset = V2_CHALLENGER_EXIT_PRESET;
+  if (cfg.exitPreset !== undefined && cfg.exitPreset !== null) {
+    validateEI1Policy(cfg.exitPreset);
+    exitPreset = cfg.exitPreset;
+  }
+  // Entry-gate ablation overrides (experimental arms only; the frozen
+  // CHALLENGER_POLICY values are the pre-registered candidate).
+  let entryGateDirectionQuality = CHALLENGER_POLICY.entryGateDirectionQuality;
+  if (finiteNumber(cfg.entryGateDirectionQuality)) {
+    if (cfg.entryGateDirectionQuality < 0 || cfg.entryGateDirectionQuality > 1) {
+      throw new Error('ENGINE_ENTRY_GATE_INVALID');
+    }
+    entryGateDirectionQuality = cfg.entryGateDirectionQuality;
+  }
+  let confidenceFloor = CHALLENGER_POLICY.confidenceFloor;
+  if (finiteNumber(cfg.confidenceFloor)) {
+    if (cfg.confidenceFloor < 0 || cfg.confidenceFloor > 1) {
+      throw new Error('ENGINE_CONFIDENCE_FLOOR_INVALID');
+    }
+    confidenceFloor = cfg.confidenceFloor;
+  }
 
   // Challenger reversal-gate state (events recorded for the reversal
   // detection metric family).
@@ -255,7 +281,7 @@ function createEnginePolicy(kind, config) {
           registeredProbability,
         });
       }
-      const decision = applyEI1Policy(state, V2_CHALLENGER_EXIT_PRESET);
+      const decision = applyEI1Policy(state, exitPreset);
       if (decision.action === 'CLOSE') {
         return Object.freeze({
           entry: null,
@@ -282,12 +308,12 @@ function createEnginePolicy(kind, config) {
 
     // Entry evaluation with confidence floor and reversal veto.
     const preferred = buy.directionQuality >= sell.directionQuality ? buy : sell;
-    if (preferred.directionQuality < CHALLENGER_POLICY.entryGateDirectionQuality) {
+    if (preferred.directionQuality < entryGateDirectionQuality) {
       return Object.freeze({
         entry: null, exit: null, stopUpdate: null, registeredProbability,
       });
     }
-    if (preferred.confidence < CHALLENGER_POLICY.confidenceFloor) {
+    if (preferred.confidence < confidenceFloor) {
       return Object.freeze({
         entry: null, exit: null, stopUpdate: null,
         registeredProbability: null,
@@ -325,6 +351,10 @@ function createEnginePolicy(kind, config) {
     kind,
     identity,
     decide,
+    exitPreset: Object.freeze(exitPreset),
+    exitPresetIsFrozen: exitPreset === V2_CHALLENGER_EXIT_PRESET,
+    entryGateDirectionQuality,
+    confidenceFloor,
     reversalEvents: () => reversalEvents.slice(),
   });
 }

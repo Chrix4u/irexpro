@@ -158,7 +158,7 @@
         "z": 0.34172530200519585,
         "n1": 173,
         "n2": 300,
-        "note": "AUC of pre-outcome registered confidence vs settled outcome; z is the two-sided signal vs chance."
+        "note": "AUC of pre-outcome registered confidence vs settled-trade outcome (netR > 0 under the ENGINE'S OWN exit policy — exit-confounded; retained as a secondary metric. The primary entry metric is the common-opportunity grid, see entryIntelligence)."
       },
       "exitEfficiency": {
         "n": 473,
@@ -573,7 +573,7 @@
         "z": 0.23954265213685147,
         "n1": 277,
         "n2": 399,
-        "note": "AUC of pre-outcome registered confidence vs settled outcome; z is the two-sided signal vs chance."
+        "note": "AUC of pre-outcome registered confidence vs settled-trade outcome (netR > 0 under the ENGINE'S OWN exit policy — exit-confounded; retained as a secondary metric. The primary entry metric is the common-opportunity grid, see entryIntelligence)."
       },
       "exitEfficiency": {
         "n": 676,
@@ -947,10 +947,14 @@
     "reversalDetection": {
       "groundTruthPoints": 3,
       "events": 336,
-      "precision": 0.026785714285714284,
+      "truePositives": 3,
+      "falseAlarms": 327,
+      "repeatedObservations": 6,
+      "precision": 0.008928571428571428,
       "recall": 1,
-      "medianLeadBars": -1,
-      "tolBars": 12
+      "medianDetectionLatencyBars": -2,
+      "tolBars": 12,
+      "methodology": "one-to-one greedy nearest-first matching within tolerance; surplus events near an already-claimed point are counted as repeated observations, not true positives; events with no point in tolerance are false alarms; latency = event bar minus ground-truth bar (negative = fired early)."
     },
     "winRateComparison": {
       "p1": 0.3657505285412262,
