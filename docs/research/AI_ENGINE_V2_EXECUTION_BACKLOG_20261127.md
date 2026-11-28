@@ -88,18 +88,85 @@ production runtime.
   shared floors, explicit sample-count ladders.
 - [ ] **P1-4** Calibration-service consolidation spec (A4/B4) including the
   pre-outcome prediction registration format (V2-7 scoreboard).
-- [ ] **P1-5** Exit-specification consolidation spec (A7/G1): parameterized
+- [x] **P1-5** Exit-specification consolidation spec (A7/G1): parameterized
   retention/force-close policy; document the four current divergent
   implementations as the comparison baseline; no constants changed.
-- [ ] **P1-6** Dead-code removal list (A6, A9, D4) — proposal only, staged
+  Delivered 2026-11-28 (post-sync with main `ce447f47`) →
+  `AI_ENGINE_V2_P1_5_EXIT_INTELLIGENCE_UNIFICATION_SPEC_20261128.md` +
+  executable mirror
+  `apps/api/scripts/research/v2-exit-intelligence-contract.cjs` (+ test,
+  CI step). Verified: six-engine inventory path-verified with byte-exact
+  constants (X1 ladder + route arms + M1 rescue, X2 tiered retention +
+  0.91 overlay, X4 guard 5/7min/-0.4R, X5 unprotected band); X3/X6
+  recorded as EVALUATION_BASED divergences (typed refusals, never
+  emulated); EI-1 unified schema with 16 typed refusals; frozen champion
+  baseline (1.1xATR/5pips/1.6R geometry, no ladder); pre-registered
+  challenger preset (X1 ladder + X4 guard + 288-bar time stop).
+- [x] **P1-6** Dead-code removal list (A6, A9, D4) — proposal only, staged
   for a separately reviewable cleanup PR (never mixed with research docs).
+  Delivered 2026-11-28 →
+  `AI_ENGINE_V2_P1_6_REDUNDANT_CODE_INVENTORY_20261128.md` +
+  executable scanner
+  `apps/api/scripts/research/v2-redundant-code-inventory.cjs` (+ test,
+  CI step). Verified: all five pinned A6 files reproduce (plus the
+  transitive v75 case), the A9 shim and the D4 0.2-constant group
+  reconcile; 45 duplicate-constant groups, 459 unused-export candidates
+  and 0 token-level near-duplicate pairs recorded as the removal-list
+  proposal.
+
+## P2R — Runnable engine and offline evaluation (extension of P2,
+delivered 2026-11-28 on this branch)
+
+Directive extension: the backlog now explicitly requires a RUNNABLE,
+isolated V2 intelligence engine — not only architecture documents and
+predicate mirrors — plus the complete offline evaluation stack:
+
+- [x] **E-1** Runnable isolated V2 intelligence engine →
+  `v2-intelligence-engine.cjs` (+ tests). Acceptance: champion mirror
+  (S1 composite byte-exact, frozen hash canary) + challenger policy
+  (confidence floor, RD-1-shaped reversal gate, EI-1 exits,
+  risk-fraction sizing, V2-7 pre-outcome probability registration);
+  research authority only.
+- [x] **E-2** Deterministic synthetic market generator (P2-1) →
+  `v2-synthetic-market.cjs`. Acceptance: planted drift recovered within
+  3 sigma on 20k-bar paths (pinned).
+- [x] **E-3** Paired-engine simulator (P2-2) →
+  `v2-paired-engine-simulator.cjs`. Acceptance: identical paths and
+  costs for both engines; ledger identity exact; equity reconciles to
+  settled nets to 1e-9; exit reasons attributed per EI-1.
+- [x] **E-4** Attribution-ledger persistence (P2-3) → JSONL export/import
+  in `v2-offline-evaluation-harness.cjs`. Acceptance: round-trip
+  integrity proof; tamper detection.
+- [x] **E-5** Offline evaluation harness computing the seven metric
+  families (entry discrimination, confidence calibration, reversal
+  detection, exit efficiency, profit retention, cost-adjusted
+  expectancy, drawdown) → `v2-offline-evaluation-harness.cjs`.
+- [x] **E-6** Comparative performance dashboard (P2-4, R6) →
+  `v2-comparative-dashboard.cjs`. Acceptance: read-only projection of
+  the ledger (single code path), self-contained HTML.
+- [x] **E-7** V1 broker-confirmed evidence window →
+  `v2-broker-evidence-window.cjs` + committed statement fixture.
+  Acceptance: four-way reconciliation (net total, balance chain,
+  realized match, duplicate guard) on the real statement.
+- [x] **E-8** Isolated DEMO evaluation environment for independent
+  review → `v2-demo-evaluation-environment.cjs` +
+  `v2-demo-evaluation-run.cjs`. Acceptance: fail-closed R1/R2/R4
+  assembly; byte-identical reruns; artifact hashes printed.
+- [x] **E-9** Campaigns P3-1..P3-3 (executed by the harness):
+  null false-positive calibration (1,000-replay runs via CLI;
+  200-replay artifact committed), known-edge detection power
+  (binormal planting, recovered within stated uncertainty),
+  exit-dominance attribution (>= 0.90 both controlled arms).
+- [ ] **E-10 (next)** Full 1,000+-replay null and edge campaigns on CI
+  hardware; multi-instrument campaigns; walk-forward variant of the
+  paired simulator.
 
 ## P2 — Evaluation harness (offline, synthetic)
 
-- [ ] **P2-1** Deterministic synthetic market generator (bar paths with
+- [x] **P2-1** Deterministic synthetic market generator (bar paths with
   known planted edge, zero edge, and adverse-selection scenarios) for
   campaign rehearsals. Acceptance: planted parameters recovered by the
-  framework within stated uncertainty.
+  framework within stated uncertainty. Delivered → E-2 above.
 - [ ] **P2-2** Paired-engine simulation harness: Champion-shaped and
   Challenger-shaped policies evaluated on identical synthetic paths with
   identical costs. Acceptance: paired deltas have correct coverage in

@@ -226,6 +226,16 @@ function decomposeCohortExplicit(trades) {
   });
 }
 
+/** Downsampled mark-to-market equity curve for dashboard sparklines. */
+function downsampleEquityCurve(curve) {
+  if (!Array.isArray(curve) || curve.length === 0) return Object.freeze([]);
+  const step = Math.max(1, Math.floor(curve.length / 300));
+  const out = [];
+  for (let i = 0; i < curve.length; i += step) out.push(curve[i]);
+  out.push(curve[curve.length - 1]);
+  return Object.freeze(out);
+}
+
 /** Full metric block for one engine side of one paired replay. */
 function evaluateEngineSide(side, market) {
   const netRows = side.trades.map((t) => ({ netR: t.netR }));
@@ -254,6 +264,7 @@ function evaluateEngineSide(side, market) {
     decomposition: cohort,
     drawdown: evaluateDrawdown(side.trades, side.equityCurve,
       (side.equityCurve[0] !== undefined ? side.equityCurve[0] : null)),
+    equityCurve: downsampleEquityCurve(side.equityCurve),
   });
 }
 

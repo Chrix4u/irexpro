@@ -285,6 +285,58 @@ jobs:
         env:
           NODE_ENV: test
 
+  v2-offline-evaluation-harness:
+    name: V2 offline evaluation harness (P2/P3)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: apps/api/.nvmrc
+      - name: Run evaluation harness tests
+        run: node --test apps/api/scripts/research/v2-offline-evaluation-harness.test.cjs
+        env:
+          NODE_ENV: test
+
+  v2-comparative-dashboard:
+    name: V2 comparative dashboard (R6)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: apps/api/.nvmrc
+      - name: Run dashboard tests
+        run: node --test apps/api/scripts/research/v2-comparative-dashboard.test.cjs
+        env:
+          NODE_ENV: test
+
+  v2-broker-evidence-window:
+    name: V2 broker evidence window (real data)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: apps/api/.nvmrc
+      - name: Run broker evidence tests
+        run: node --test apps/api/scripts/research/v2-broker-evidence-window.test.cjs
+        env:
+          NODE_ENV: test
+
+  v2-demo-evaluation-environment:
+    name: V2 demo evaluation environment (R1/R2/R4)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: apps/api/.nvmrc
+      - name: Run demo environment tests
+        run: node --test apps/api/scripts/research/v2-demo-evaluation-environment.test.cjs
+        env:
+          NODE_ENV: test
+
   v2-intelligence-engine:
     name: V2 intelligence engine (runnable challenger + champion mirror)
     runs-on: ubuntu-24.04
