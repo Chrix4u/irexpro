@@ -316,6 +316,36 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify V2-G1 immutable baseline freeze (PI-0)
+        run: node --test apps/api/scripts/research/v2-baseline-freeze.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 historical data ingestion contract (PI-1)
+        run: node --test apps/api/scripts/research/v2-historical-data-contract.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 synthetic multi-symbol multi-timeframe fixtures (PI-2)
+        run: node --test apps/api/scripts/research/v2-pi-market-fixtures.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 common prediction-opportunity dataset (PI-3)
+        run: node --test apps/api/scripts/research/v2-prediction-dataset.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 predictive-intelligence candidate models (PI-4)
+        run: node --test apps/api/scripts/research/v2-pi-models.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 predictive-intelligence evaluation campaign (PI-5)
+        run: node --test apps/api/scripts/research/v2-pi-campaign.test.cjs
+        env:
+          NODE_ENV: test
+
   build:
     name: Build
     runs-on: ubuntu-24.04

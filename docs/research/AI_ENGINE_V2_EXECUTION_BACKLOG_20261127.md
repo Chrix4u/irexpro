@@ -310,49 +310,70 @@ artifacts.
   `V2-G1` pinned at `559d4d06` with SHA-256 of the six core runnable
   artifacts; in-place drift is a typed refusal (`BASELINE_TAMPERED`).
   Acceptance: freeze verified on every run; fingerprint stable.
-- [ ] **PI-1** Secure historical-data ingestion contract (schema
+- [x] **PI-1** Secure historical-data ingestion contract (schema
   validation, chronological ordering, duplicate refusal, OHLC sanity,
   multi-timeframe aggregation with strict closed-bar no-future-peek
-  semantics). Acceptance: typed refusals on every malformed ingestion;
-  aggregation provably uses only bars closed before the decision time.
-  Privacy: fully synthetic fixtures in-repo; no broker records.
-- [ ] **PI-2** Synthetic multi-symbol multi-timeframe fixtures (M1 base →
-  M5/M15/H1/H4) for EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF with
-  null, planted-continuation-edge, trend-regime and reversion scenarios,
-  deterministic seeds. Acceptance: planted edge empirically recoverable;
-  null fixtures carry zero planted edge.
-- [ ] **PI-3** Common prediction-opportunity dataset builder: every
-  opportunity in the grid (including rejected/abstained) with IDENTICAL
-  fixed-horizon outcome definitions for all candidates; chronological
-  walk-forward splits with purge + embargo; held-out dataset preserved
-  against tuning. Acceptance: leakage controls provable (no future bars
-  in features, no held-out leakage into fitting).
-- [ ] **PI-4** Candidate model classes for trend-continuation, reversal,
-  market-regime and expected-return prediction: classical statistical
-  baselines (prior, L2 logistic, ridge), temporal models (online
-  recency-weighted logistic, AR(p)) and gradient-boosted stump ensembles
-  (small/large). Acceptance: deterministic fits; complexity descriptors
-  recorded for complexity-vs-value comparison.
-- [ ] **PI-5** Unified evaluation campaign: null false-positive control,
-  planted-edge detection sensitivity, complexity-vs-out-of-sample-value
-  table, prediction-quality layer (AUC/Brier/calibration on the FULL
-  common grid) strictly separated from the policy/economics layer
-  (one identical standardized fixed-horizon policy for every candidate).
-  Acceptance: null FP ≤ nominal; planted edge recovered within stated
-  uncertainty; no candidate improved via frequency reduction.
-- [ ] **PI-6** Research design + results documentation, privacy
-  compliance statement (synthetic fixtures only; original evidence
-  preserved securely offline; no squash-merge to conceal data, no shared
-  history rewrite, no new broker accounts) and red lines.
-- [ ] **PI-7** CI steps for every new suite; deterministic run artifacts
-  committed under `runs/` with SHA-256 recorded.
-- [ ] **PI-8** Held-out final report (single evaluation on the preserved
-  held-out dataset, nothing tuned there) and the pre-registered decision
-  gate: broker-connected evaluation is recommended ONLY with statistically
-  credible positive after-cost expectancy (95% CI excluding zero) AND
-  significant prediction-quality improvement over the prior baseline on
-  held-out data. Honest negative results reported as-is.
-- [ ] **PI-9** Operator-blocked items recorded (unchanged): the authorized
+  semantics). Delivered → `v2-historical-data-contract.cjs` (+ test, CI
+  step). Verified: six symbols, five timeframes, typed refusals on every
+  malformed ingestion class; raw broker records refused at the boundary
+  (`DATA_PROVENANCE_REFUSED`) — synthetic fixtures and future
+  operator-authorized exports only; trailing-partial-bucket protection
+  and interior gap accounting; `closedBarAt` provably uses only bars
+  whose window closed at or before the decision time.
+- [x] **PI-2** Synthetic multi-symbol multi-timeframe fixtures. Delivered
+  → `v2-pi-market-fixtures.cjs` (+ test, CI step). Verified: M1 base
+  aggregated through the PI-1 contract into M5/M15/H1/H4 for EURUSD,
+  GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF; PI_NULL zero-edge rate ≈ 0.5;
+  PI_PLANTED_CONTINUATION conditional calm-momentum edge with measured
+  continuation rate at triggers 0.5576 (planted 0.56) and
+  non-overlapping trigger windows; PI_TREND_REGIMES episode ground
+  truth; PI_REVERSION OU pull. Fully synthetic, seeded, deterministic.
+- [x] **PI-3** Common prediction-opportunity dataset builder. Delivered
+  → `v2-prediction-dataset.cjs` (+ test, CI step). Verified: FULL common
+  grid including rejected opportunities (abstention never shrinks the
+  denominator); identical fixed-horizon outcome definitions computed by
+  one code path; M1/M5/M15/H1/H4 context features from closed bars only
+  (mutation-test proof); decision spacing equals label horizon
+  (non-overlapping outcomes); chronological walk-forward splits with
+  purge + embargo; 20% held-out preserved against tuning; train-only
+  scaler.
+- [x] **PI-4** Candidate model classes. Delivered → `v2-pi-models.cjs`
+  (+ test, CI step). Verified: classical (prior, L2 logistic,
+  closed-form ridge), temporal (recency-weighted logistic with flip
+  adaptation; AR(p) with coefficient recovery), boosted shallow stumps
+  (small/large tiers; nonlinear-interval advantage over logistic);
+  fixed-threshold regime classifier; deterministic fits with parameter
+  counts recorded for the complexity-vs-value comparison.
+- [x] **PI-5** Unified evaluation campaign. Delivered →
+  `v2-pi-campaign.cjs` + CLI `v2-pi-run.cjs` (+ test, CI step) +
+  committed full-scale artifact `runs/v2-pi-campaign-20261128/`
+  (SHA-256 recorded). Verified: null FP control CONTROLLED (direction
+  task, Bonferroni family-wise, 0 rejections; continuation/reversal
+  labels excluded as partially tautological); planted-edge sensitivity
+  recovered (null direction AUC 0.4967 vs planted 0.5341, z = 4.07;
+  fixture rate 0.5576); complexity-vs-value table (stumps-100 buys
+  nothing over the 13-parameter logistic; AR(5) matches larger
+  regression models); Layer A on the FULL grid strictly separated from
+  Layer B (one identical standardized fixed-horizon policy,
+  train-derived thresholds).
+- [x] **PI-6** Research design + results documentation. Delivered →
+  `AI_ENGINE_V2_PI_RESEARCH_DESIGN_20261128.md`: directive mapping,
+  privacy compliance (synthetic fixtures only; original evidence
+  preserved offline; no squash-merge/history rewrite/broker
+  provisioning), layer semantics, methodology corrections found during
+  the first full-scale run (tautological labels; family-wise FP
+  control; planted-edge detection task; H4 vol degeneracy fix), honest
+  results, red lines.
+- [x] **PI-7** CI steps for every new suite (6 added; 26 V2 research
+  steps total); deterministic run artifacts committed under `runs/` with
+  SHA-256 recorded (`448b3132…`).
+- [x] **PI-8** Held-out final report (single evaluation on the preserved
+  held-out dataset; nothing tuned there) and the pre-registered decision
+  gate: NOT_RECOMMENDED — C3 (real-data evaluation) unmet on synthetic
+  fixtures; the single C1+C2 pass (ridge expected-return on the
+  planted-regimes cell) is a sensitivity-validation artifact, not a
+  recommendation. No profitability claim from synthetic results.
+- [x] **PI-9** Operator-blocked items recorded (unchanged): the authorized
   private historical export (P4) and any broker provisioning (P5) remain
   outside this phase; V2 stays research-only with no LIVE authority.
 
