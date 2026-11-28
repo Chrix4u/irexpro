@@ -216,6 +216,51 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify V2 Challenger attribution ledger is isolated and append-only
+        run: node --test apps/api/scripts/research/v2-challenger-attribution.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 statistical evaluation framework reference values
+        run: node --test apps/api/scripts/research/v2-statistical-evaluation.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 entry-exit decomposition identity and refusals
+        run: node --test apps/api/scripts/research/v2-entry-exit-decomposition.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 engine component map inventory and drift detector
+        run: node --test apps/api/scripts/research/v2-engine-component-map.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 direction-scorer contract (P1-1) inventory and DS-1 refusals
+        run: node --test apps/api/scripts/research/v2-direction-scorer-contract.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 reversal-definition contract (P1-2) corpus and RD-1 refusals
+        run: node --test apps/api/scripts/research/v2-reversal-definition-contract.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 engine component map phase 2 (P1-0.5) Python core, orchestration and data edges
+        run: node --test apps/api/scripts/research/v2-engine-component-map-phase2.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 reliability-gate contract (P1-3) corpus, RL-1 refusals and extraction seams
+        run: node --test apps/api/scripts/research/v2-reliability-gate-contract.test.cjs
+        env:
+          NODE_ENV: test
+
+      - name: Verify V2 calibration contract (P1-4) corpus, CAL-1 refusals and scoreboard rules
+        run: node --test apps/api/scripts/research/v2-calibration-contract.test.cjs
+        env:
+          NODE_ENV: test
+
   build:
     name: Build
     runs-on: ubuntu-24.04
