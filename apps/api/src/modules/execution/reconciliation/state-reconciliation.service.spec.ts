@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { IsNull, LessThan, Not } from 'typeorm';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
 import { BrokerAccount } from '../../broker/entities/broker-account.entity';
 import { BrokerService } from '../../broker/broker.service';
@@ -1098,6 +1099,78 @@ describe('StateReconciliationService', () => {
         expect(lateClosed.externalPositionId).toBeNull();
       },
     );
+
+    it('rotates persistent incomplete settlements without changing scope or the ten-row budget', async () => {
+      const now = Date.now();
+      const rows = Array.from({ length: 11 }, (_, i) => ({
+        ...openTrade(),
+        id: `00000000-0000-4000-8000-${String(20 - i).padStart(12, '0')}`,
+        status: TradeStatus.CLOSED,
+        externalPositionId: String(10000 + i),
+        externalOrderId: String(20000 + i),
+        openedAt: new Date(now - 120_000),
+        closedAt: new Date(now - 60_000),
+      }));
+      const firstPage = rows.slice(0, 10);
+      const secondPage = rows.slice(10);
+      tradeRepo.find
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce(firstPage)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce(secondPage)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce(firstPage);
+      resolution.backfillClosedDemoSettlement.mockResolvedValue(false);
+      const conn = {
+        ...connection(),
+        brokerId: 'pepperstone-ctrader',
+        encryptedCredentials: 'encrypted-test',
+        credentialIv: 'iv-test',
+        credentialTag: 'tag-test',
+      } as BrokerConnection;
+      encryptionService.decrypt.mockReturnValue({ accountId: 'demo-test' });
+      const where = (cursor?: string) => {
+        const scope = {
+          brokerConnectionId: conn.id,
+          userId: conn.userId,
+          status: TradeStatus.CLOSED,
+          closedAt: expect.anything(),
+          ...(cursor ? { id: LessThan(cursor) } : {}),
+        };
+        return {
+          where: [
+            { ...scope, realisedPnl: IsNull(), commission: IsNull(), exitPrice: IsNull() },
+            {
+              ...scope,
+              externalPositionId: Not(IsNull()),
+              realisedPnl: Not(IsNull()),
+              commission: Not(IsNull()),
+              exitPrice: Not(IsNull()),
+              swap: IsNull(),
+            },
+          ],
+          order: { id: 'DESC' },
+          take: 10,
+        };
+      };
+      await service.runForConnection(conn);
+      expect(tradeRepo.find).toHaveBeenNthCalledWith(2, where());
+      expect(tradeRepo.find.mock.calls[1][0].where[0].closedAt.type).toBe('moreThan');
+      expect(resolution.backfillClosedDemoSettlement).toHaveBeenCalledTimes(10);
+      service['closedEconomicsLookupAtByConnection'].delete(conn.id);
+      await service.runForConnection(conn);
+      expect(tradeRepo.find).toHaveBeenNthCalledWith(4, where(firstPage[9].id));
+      expect(resolution.backfillClosedDemoSettlement).toHaveBeenCalledTimes(11);
+      expect(resolution.backfillClosedDemoSettlement).toHaveBeenLastCalledWith(
+        expect.objectContaining({ trade: expect.objectContaining({ id: secondPage[0].id }) }),
+      );
+      service['closedEconomicsLookupAtByConnection'].delete(conn.id);
+      await service.runForConnection(conn);
+      expect(tradeRepo.find).toHaveBeenNthCalledWith(6, where());
+      expect(resolution.backfillClosedDemoSettlement).toHaveBeenCalledTimes(21);
+      expect(adapter.modifyOrder).not.toHaveBeenCalled();
+      expect(orderService.applyFill).not.toHaveBeenCalled();
+    });
 
     it('never probes late economics for a LIVE cTrader connection', async () => {
       const conn = {
