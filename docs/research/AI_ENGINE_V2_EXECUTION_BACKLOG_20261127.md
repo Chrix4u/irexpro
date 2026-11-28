@@ -104,7 +104,15 @@ production runtime.
   statistics is a typed refusal (21-test suite). Verified: floors span
   3→20 samples and PF 0.75→2.0 across the nine gates; the composition veto
   covers 2 of G1's ten failure reasons (corpus RL-D07); the advisory
-  overlay multiplies risk to a 0.2 floor and can never veto.
+  overlay multiplies risk to a 0.2 floor and can never veto. Integration
+  note (2026-11-28): recovered from
+  `research/ai-engine-v2-p1-3-reliability-20261127` @ `cff28862`, stacked on
+  the P1-0.5 engine-map extension @ `31c4e862`; cherry-picked post
+  main-sync `ce447f47` with CI/backlog conflict resolution; contract content
+  byte-preserved; 21/21 tests green on the synced baseline. P1-0.5 extension
+  (`AI_ENGINE_V2_EXECUTION_BACKLOG_EXTENSION_20261127.md` +
+  `AI_ENGINE_V2_COMPONENT_MAP_PHASE2_20261127.md` + phase-2 map mirror, 14/14
+  tests green) integrated in the same recovery series.
 - [x] **P1-4** Calibration-service consolidation spec (A4/B4) including the
   pre-outcome prediction registration format (V2-7 scoreboard). Delivered →
   `AI_ENGINE_V2_P1_4_CALIBRATION_CONSOLIDATION_SPEC_20261127.md` +
