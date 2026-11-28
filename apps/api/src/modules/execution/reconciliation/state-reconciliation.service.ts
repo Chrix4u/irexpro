@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, MoreThan, Not, Repository } from 'typeorm';
+import { In, IsNull, LessThan, MoreThan, Not, Repository } from 'typeorm';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
 import { BrokerAccount } from '../../broker/entities/broker-account.entity';
 import { BrokerService } from '../../broker/broker.service';
@@ -233,6 +233,7 @@ export class StateReconciliationService {
   // Keep a separate bounded DEMO-only 15-minute late-settlement lookup,
   // never repeated on every 60s general reconciliation sweep.
   private readonly closedEconomicsLookupAtByConnection = new Map<string, number>();
+  private readonly closedEconomicsCursorByConnection = new Map<string, string>();
   private readonly demoCloseRecoveryCursor = new Map<string, string>();
   /** Fair-rotation cursor for the aged (historical) DEMO close-order sweep. */
   private readonly agedDemoCloseRecoveryCursor = new Map<string, string>();
@@ -457,32 +458,48 @@ export class StateReconciliationService {
       let closedUnsettledTrades: Trade[] = [];
       if (shouldInspectLateEconomics) {
         this.closedEconomicsLookupAtByConnection.set(connection.id, lateEconomicsNow);
+        // An unresolved newest page must not indefinitely starve other
+        // eligible settlements. Traverse the stable unique UUID key instead
+        // of offset pagination (which skips rows after successful repairs).
+        // UUID ordering also avoids JS Date truncating database precision.
+        const cursor = this.closedEconomicsCursorByConnection.get(connection.id);
+        const scope = {
+          brokerConnectionId: connection.id,
+          userId: connection.userId,
+          status: TradeStatus.CLOSED,
+          closedAt: MoreThan(new Date(lateEconomicsNow - 7 * 86400_000)),
+          ...(cursor ? { id: LessThan(cursor) } : {}),
+        };
         closedUnsettledTrades = await this.tradeRepo.find({
           where: [
             {
-              brokerConnectionId: connection.id,
-              userId: connection.userId,
-              status: TradeStatus.CLOSED,
+              ...scope,
               realisedPnl: IsNull(),
               commission: IsNull(),
               exitPrice: IsNull(),
-              closedAt: MoreThan(new Date(lateEconomicsNow - 7 * 86400_000)),
             },
             {
-              brokerConnectionId: connection.id,
-              userId: connection.userId,
-              status: TradeStatus.CLOSED,
+              ...scope,
               externalPositionId: Not(IsNull()),
               realisedPnl: Not(IsNull()),
               commission: Not(IsNull()),
               exitPrice: Not(IsNull()),
               swap: IsNull(),
-              closedAt: MoreThan(new Date(lateEconomicsNow - 7 * 86400_000)),
             },
           ],
-          order: { closedAt: 'DESC' },
+          order: { id: 'DESC' },
           take: 10,
         });
+        if (closedUnsettledTrades.length === 10) {
+          this.closedEconomicsCursorByConnection.set(
+            connection.id,
+            closedUnsettledTrades[closedUnsettledTrades.length - 1].id,
+          );
+        } else {
+          // Wrap on the next scheduled sweep; do not exceed the existing
+          // ten-candidate budget or introduce extra provider requests.
+          this.closedEconomicsCursorByConnection.delete(connection.id);
+        }
       }
       const closedTrades =
         internalTrades.length + closedUnsettledTrades.length > 0
