@@ -17,7 +17,9 @@ env:
 jobs:
   research:
     name: USDJPY v4 fresh-data qualification and future holdout
-    if: github.event_name == 'workflow_dispatch'
+    # Runtime-only VPS policy: held until the hosted artifact replacement is verified.
+    if: >-
+      false && (github.event_name == 'workflow_dispatch')
     concurrency:
       group: irexpro-single-pair-research
       cancel-in-progress: false
