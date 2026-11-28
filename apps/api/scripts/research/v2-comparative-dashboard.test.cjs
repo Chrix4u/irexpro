@@ -36,22 +36,29 @@ test('dashboard carries the binding banners and evidence limits', () => {
   const html = renderComparativeDashboard({ campaign });
   assert.ok(html.includes('OFFLINE SIMULATION'));
   assert.ok(html.includes('RESEARCH-ONLY'));
+  assert.ok(html.includes('CHAMPION SIDE = SIMPLIFIED S1 MIRROR'));
+  assert.ok(html.includes('NOT the complete deployed V1 Champion'));
   assert.ok(html.includes('SYNTHETIC RESULTS ARE NOT EVIDENCE OF PROFITABILITY'));
   assert.ok(html.includes('V2 NOT PROMOTED TO LIVE'));
   assert.ok(html.includes('Evidential limits'));
-  assert.ok(html.includes('REVERSAL_EXIT') || true);
-  // Section count is pinned: 10 sections, with or without optional inputs.
-  assert.strictEqual((html.match(/<h2>/g) || []).length, 10);
+  assert.ok(html.includes('one-to-one matching'));
+  assert.ok(html.includes('common prediction opportunities'));
+  assert.ok(html.includes('SIMPLIFIED_S1_MIRROR'));
+  // Section count is pinned: 11 sections (7b entry intelligence added
+  // 2026-11-28), with or without optional inputs.
+  assert.strictEqual((html.match(/<h2>/g) || []).length, 11);
 });
 
-test('dashboard includes the real broker evidence window verbatim', () => {
+test('dashboard includes the sanitized broker evidence window verbatim', () => {
   const campaign = runCampaign({ seed: 911, nBars: 1200, scenario: 'TREND_REGIMES' });
   const evidence = loadBrokerEvidenceWindow(repoRoot);
   const html = renderComparativeDashboard({ campaign, evidence });
   assert.ok(html.includes('broker-confirmed evidence window (REAL data'));
   assert.ok(html.includes('-442.49'));
-  assert.ok(html.includes('DID332349465'));
+  assert.ok(html.includes('DID-S00001'));
   assert.ok(html.includes('Window-vs-account gap'));
+  // Sanitization guard: raw broker identifiers never render.
+  assert.strictEqual(html.includes('DID3'), false);
 });
 
 test('dashboard is deterministic for the same inputs', () => {

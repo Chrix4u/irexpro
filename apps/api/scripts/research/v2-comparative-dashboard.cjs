@@ -73,7 +73,7 @@ function renderComparativeDashboard(inputs) {
   }
   const { campaign, nullCampaign, edgeCampaign, dominance, evidence, meta } = inputs;
   const sides = [
-    { key: 'champion', label: 'V1 Champion (mirror)', cls: 'champion' },
+    { key: 'champion', label: 'V1 Champion — simplified S1 mirror', cls: 'champion' },
     { key: 'challenger', label: 'V2 Challenger', cls: 'challenger' },
   ];
 
@@ -91,7 +91,7 @@ function renderComparativeDashboard(inputs) {
       const eng = m === campaign.champion ? 'V1-CHAMPION-MIRROR' : 'V2-CHALLENGER';
       return fmt(summaryBy[eng] ? summaryBy[eng].totalNetPnl : null);
     }],
-    ['Entry discrimination AUC (z)', (m) => `${fmt(m.discrimination.auc, 4)} (z ${fmt(m.discrimination.z, 2)})`],
+    ['Entry discrimination AUC (z, settled trades — exit-confounded)', (m) => `${fmt(m.discrimination.auc, 4)} (z ${fmt(m.discrimination.z, 2)})`],
     ['Calibration ECE / Brier', (m) => m.calibration
       ? `${fmt(m.calibration.expectedCalibrationError, 4)} / ${fmt(m.calibration.brierScore, 4)}`
       : '—'],
@@ -176,13 +176,31 @@ ${edgeRows}
 
   const reversal = campaign.reversalDetection;
   const reversalBlock = reversal ? `
-<h2>7 · Reversal detection (challenger gate vs regime ground truth)</h2>
+<h2>7 · Reversal detection (challenger gate vs regime ground truth — one-to-one matching)</h2>
 <table>
-<tr><th>Ground-truth points</th><th>Gate events</th><th>Precision</th><th>Recall</th><th>Median lead (bars)</th></tr>
-<tr><td>${reversal.groundTruthPoints}</td><td>${reversal.events}</td><td>${fmt(reversal.precision, 3)}</td><td>${fmt(reversal.recall, 3)}</td><td>${fmt(reversal.medianLeadBars, 0)}</td></tr>
+<tr><th>Ground-truth points</th><th>Gate events</th><th>True positives</th><th>False alarms</th><th>Repeated observations</th><th>Precision</th><th>Recall</th><th>Median latency (bars)</th></tr>
+<tr><td>${reversal.groundTruthPoints}</td><td>${reversal.events}</td><td>${reversal.truePositives}</td><td>${reversal.falseAlarms}</td><td>${reversal.repeatedObservations}</td><td>${fmt(reversal.precision, 3)}</td><td>${fmt(reversal.recall, 3)}</td><td>${fmt(reversal.medianDetectionLatencyBars, 0)}</td></tr>
 </table>
-<p class="note">tolerance ±${reversal.tolBars} bars; precision is low by construction in noisy regime flips — the
-challenger's gate is a conservative veto, and its value shows in the exit-reason table (REVERSAL_EXIT), not in precision.</p>` : notIncluded.replace('SECTION', '7 · Reversal detection (challenger gate vs regime ground truth)');
+<p class="note">${esc(reversal.methodology)} Negative latency = the event fired before the planted reversal. Repeated
+observations of an already-matched reversal are counted as repeated, NOT as new true positives; precision counts
+them as detections that failed to produce a new match.</p>` : notIncluded.replace('SECTION', '7 · Reversal detection (challenger gate vs regime ground truth — one-to-one matching)');
+
+  const ei = campaign.entryIntelligence;
+  const eiAbst = ei && ei.challengerAbstention;
+  const entryIntelligenceBlock = ei ? `
+<h2>7b · Entry intelligence on common prediction opportunities (primary entry metric)</h2>
+<table>
+<tr><th>Common opportunities</th><th>Shared-score AUC (z)</th><th>Challenger abstained</th><th>Taken win rate</th><th>Abstained win rate</th><th>Difference (95% CI)</th></tr>
+<tr><td>${ei.commonOpportunities}</td>
+<td>${ei.sharedScoreDiscrimination ? `${fmt(ei.sharedScoreDiscrimination.auc, 4)} (z ${fmt(ei.sharedScoreDiscrimination.z, 2)})` : '—'}</td>
+<td>${eiAbst ? eiAbst.abstainedCount : '—'}</td>
+<td>${eiAbst ? pct(eiAbst.takenWinRate) : '—'}</td>
+<td>${eiAbst ? pct(eiAbst.abstainedWinRate) : '—'}</td>
+<td>${eiAbst ? (eiAbst.winRateDifference.confidence95
+    ? `[${pct(eiAbst.winRateDifference.confidence95[0])}, ${pct(eiAbst.winRateDifference.confidence95[1])}]`
+    : 'typed refusal (insufficient sample)') : '—'}</td></tr>
+</table>
+<p class="note">${esc(ei.outcomeDefinition)}. ${esc(ei.note)}</p>` : notIncluded.replace('SECTION', '7b · Entry intelligence on common prediction opportunities (primary entry metric)');
 
   const equitySparks = sides.map((s) => {
     const curve = campaign[s.key].equityCurve;
@@ -201,11 +219,14 @@ challenger's gate is a conservative veto, and its value shows in the exit-reason
 <h1>iRexPro AI Engine V2 — Champion–Challenger comparative evaluation</h1>
 <p class="muted">${esc(metaBlock.generatedFor || 'offline evaluation harness')} · ${esc(metaBlock.branch || '')} · seed ${esc(String(campaign.market.seed))}</p>
 <span class="banner">OFFLINE SIMULATION</span><span class="banner">RESEARCH-ONLY</span>
+<span class="banner warn">CHAMPION SIDE = SIMPLIFIED S1 MIRROR — NOT THE DEPLOYED V1 CHAMPION</span>
 <span class="banner warn">SYNTHETIC RESULTS ARE NOT EVIDENCE OF PROFITABILITY</span>
 <span class="banner warn">V2 NOT PROMOTED TO LIVE</span>
 
-<h2>1 · Constraint compliance</h2>
+<h2>1 · Constraint compliance and comparison semantics</h2>
 <div class="panel"><ul>
+<li>Champion side fidelity (<code>${campaign.comparisonSemantics ? esc(campaign.comparisonSemantics.championSide) : 'SIMPLIFIED_S1_MIRROR'}</code>): the paired campaign runs a RESEARCH MIRROR of S1 (9-term composite, B1 confidence, fixed stop/target geometry, fixed 0.2 lot) — NOT the complete deployed V1 Champion (M1 orchestration, six-pair routing, reliability gates, calibration layers, X1..X6 exits). All campaign deltas are mirror-relative.</li>
+<li>The only actual deployed-V1 performance datum is the broker-confirmed evidence window in section 3 (single day, descriptive only).</li>
 <li>V1 champion baseline frozen (policy mirror hash-pinned; exits are hard stop/target only).</li>
 <li>All engine identities carry execution authority <code>RESEARCH_SHADOW</code>; no order authority exists in the research stack.</li>
 <li>Execution costs calibrated to the broker evidence window (median implied friction ${evidence ? fmt(evidence.medianImpliedFrictionPipsPerLot, 3) : '—'} pips/lot); every cost is charged, never waived.</li>
@@ -227,6 +248,7 @@ ${nullBlock}
 ${edgeBlock}
 ${dominanceBlock}
 ${reversalBlock}
+${entryIntelligenceBlock}
 
 <h2>8 · Attribution ledger summary (single source of truth)</h2>
 <table><tr><th>Engine</th><th>Trades</th><th>Total net (USD)</th><th>Commission (USD)</th><th>Swap (USD)</th><th>Net per lot</th></tr>${ledgerTotals}</table>

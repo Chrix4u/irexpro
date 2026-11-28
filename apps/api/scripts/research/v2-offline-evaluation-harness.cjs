@@ -120,6 +120,162 @@ function settleRegistrations(registrations, bars) {
   return settled;
 }
 
+/**
+ * Reversal event matching with STRICT one-to-one assignment (fixed
+ * methodology 2026-11-28: repeated observations are no longer counted as
+ * independent true positives). Each ground-truth reversal point may be
+ * claimed by at most one event; each event claims at most one point.
+ * Assignment is greedy nearest-first (deterministic: distance, then event
+ * bar, then point bar). Unmatched events are split into:
+ *   - repeatedObservations: within tolerance of a point already claimed by
+ *     another event (a re-observation of an already-detected reversal);
+ *   - falseAlarms: no ground-truth point within tolerance at all.
+ * Returns TP pairs with per-pair detection latency (event bar minus point
+ * bar; negative = fired before the planted reversal = lead).
+ */
+function matchReversalEvents(events, points, tolBars) {
+  if (!Array.isArray(events) || !Array.isArray(points)) {
+    throw new Error('HARNESS_REVERSAL_INPUT_REQUIRED');
+  }
+  if (!Number.isInteger(tolBars) || tolBars < 0) {
+    throw new Error('HARNESS_REVERSAL_TOL_INVALID');
+  }
+  const candidates = [];
+  for (let ei = 0; ei < events.length; ei += 1) {
+    for (let pi = 0; pi < points.length; pi += 1) {
+      const d = Math.abs(points[pi].bar - events[ei].bar);
+      if (d <= tolBars) candidates.push({ ei, pi, d });
+    }
+  }
+  candidates.sort((a, b) => a.d - b.d ||
+    events[a.ei].bar - events[b.ei].bar ||
+    points[a.pi].bar - points[b.pi].bar);
+  const claimedEvent = new Array(events.length).fill(false);
+  const claimedPoint = new Array(points.length).fill(false);
+  const pairs = [];
+  for (const c of candidates) {
+    if (claimedEvent[c.ei] || claimedPoint[c.pi]) continue;
+    claimedEvent[c.ei] = true;
+    claimedPoint[c.pi] = true;
+    pairs.push({
+      eventBar: events[c.ei].bar,
+      pointBar: points[c.pi].bar,
+      leadBars: events[c.ei].bar - points[c.pi].bar,
+      event: events[c.ei],
+      point: points[c.pi],
+    });
+  }
+  let repeatedObservations = 0;
+  let falseAlarms = 0;
+  for (let ei = 0; ei < events.length; ei += 1) {
+    if (claimedEvent[ei]) continue;
+    const nearClaimedPoint = points.some((p, pi) =>
+      claimedPoint[pi] && Math.abs(p.bar - events[ei].bar) <= tolBars);
+    if (nearClaimedPoint) repeatedObservations += 1;
+    else falseAlarms += 1;
+  }
+  return Object.freeze({
+    truePositives: pairs.length,
+    pairs: Object.freeze(pairs.map((p) => Object.freeze({
+      eventBar: p.eventBar, pointBar: p.pointBar, leadBars: p.leadBars,
+    }))),
+    repeatedObservations,
+    falseAlarms,
+  });
+}
+
+/**
+ * Entry intelligence on COMMON prediction opportunities with an IDENTICAL
+ * outcome definition (fixed methodology 2026-11-28): the evaluation grid
+ * is the bars where BOTH engines registered a pre-outcome probability; the
+ * outcome is the sign of the fixed-horizon forward return over the
+ * registration window — identical for both engines, so the comparison is
+ * never contaminated by the engines' different exit policies on settled
+ * trades. Additionally evaluates the challenger's abstention selectivity:
+ * among the champion's registered opportunities the challenger declined
+ * (confidence floor / reversal veto), do the realized fixed-horizon
+ * outcomes realize a lower win rate than the taken ones?
+ */
+function evaluateCommonOpportunityEntries(replay, market) {
+  if (!replay || !market || !Array.isArray(market.bars)) {
+    throw new Error('HARNESS_COMMON_OPPORTUNITY_INPUT_REQUIRED');
+  }
+  const champByBar = new Map();
+  for (const r of replay.champion.registrations) champByBar.set(r.bar, r);
+  const chalByBar = new Map();
+  for (const r of replay.challenger.registrations) chalByBar.set(r.bar, r);
+
+  const settleOutcome = (r) => {
+    const target = r.bar + r.windowBars;
+    if (target >= market.bars.length) return null;
+    const forward = market.bars[target].close - market.bars[r.bar].close;
+    return forward * (r.direction === 'BUY' ? 1 : -1) > 0 ? 1 : 0;
+  };
+
+  const common = [];
+  for (const [bar, r] of champByBar) {
+    if (!chalByBar.has(bar)) continue;
+    const outcome = settleOutcome(r);
+    if (outcome === null) continue;
+    common.push({ score: r.probability, outcome, bar });
+  }
+  const abstained = [];
+  for (const [bar, r] of champByBar) {
+    if (chalByBar.has(bar)) continue;
+    const outcome = settleOutcome(r);
+    if (outcome === null) continue;
+    abstained.push({ outcome, bar });
+  }
+
+  let aucBlock = null;
+  if (common.length > 0) {
+    const auc = mannWhitneyAUC(common);
+    const n1 = common.filter((c) => c.outcome === 1).length;
+    const n2 = common.length - n1;
+    const se = aucStandardError(auc, n1, n2);
+    aucBlock = Object.freeze({
+      n: common.length, auc, se, z: (auc - 0.5) / se, n1, n2,
+    });
+  }
+
+  let abstention = null;
+  if (common.length > 0 && abstained.length > 0) {
+    const takenWins = common.filter((c) => c.outcome === 1).length;
+    const abstWins = abstained.filter((a) => a.outcome === 1).length;
+    let difference = null;
+    try {
+      difference = compareWinRates(
+        { wins: takenWins, n: common.length },
+        { wins: abstWins, n: abstained.length },
+      );
+    } catch (e) {
+      difference = { refused: String(e.message) };
+    }
+    abstention = Object.freeze({
+      takenCount: common.length,
+      takenWinRate: takenWins / common.length,
+      abstainedCount: abstained.length,
+      abstainedWinRate: abstWins / abstained.length,
+      winRateDifference: Object.freeze(difference),
+    });
+  }
+
+  return Object.freeze({
+    method: 'COMMON_OPPORTUNITY_GRID',
+    outcomeDefinition: 'sign of fixed-horizon forward close-to-close ' +
+      'return over windowBars from the registration bar (identical for both ' +
+      'engines; exit-policy-free)',
+    commonOpportunities: common.length,
+    sharedScoreDiscrimination: aucBlock,
+    challengerAbstention: abstention,
+    note: 'Both engines share the S1 entry scoring by design, so the common-' +
+      'set AUC is identical for both engines; the paired delta isolates ' +
+      'exit/reversal/abstention layers. The abstention block measures ' +
+      'whether the challenger\'s floor/veto filters remove opportunities ' +
+      'that realize LOWER win rates (positive selection).',
+  });
+}
+
 /** Entry discrimination: AUC + Hanley-McNeil SE of registered confidence. */
 function evaluateEntryDiscrimination(trades) {
   const items = trades
@@ -135,8 +291,10 @@ function evaluateEntryDiscrimination(trades) {
   const z = (auc - 0.5) / se;
   return Object.freeze({
     n: items.length, auc, se, z, n1, n2,
-    note: 'AUC of pre-outcome registered confidence vs settled outcome; ' +
-      'z is the two-sided signal vs chance.',
+    note: 'AUC of pre-outcome registered confidence vs settled-trade ' +
+      'outcome (netR > 0 under the ENGINE\'S OWN exit policy — exit-' +
+      'confounded; retained as a secondary metric. The primary entry ' +
+      'metric is the common-opportunity grid, see entryIntelligence).',
   });
 }
 
@@ -285,39 +443,40 @@ function runCampaign(config) {
   const champion = evaluateEngineSide(replay.champion, market);
   const challenger = evaluateEngineSide(replay.challenger, market);
 
-  // Reversal detection: challenger gate events vs regime ground truth.
+  // Reversal detection: challenger gate events vs regime ground truth,
+  // one-to-one matching (repeated observations ≠ true positives).
   const tolBars = (config && config.reversalTolBars) || 12;
   const points = market.groundTruth.reversalPoints.filter((p) => p.directional);
   const events = replay.challenger.reversalEvents;
-  let matchedEvents = 0;
-  const leads = [];
-  const matchedPoints = new Set();
-  for (const e of events) {
-    let best = null;
-    for (const point of points) {
-      if (Math.abs(point.bar - e.bar) <= tolBars) {
-        if (best === null || Math.abs(point.bar - e.bar) < Math.abs(best - e.bar)) {
-          best = point.bar;
-        }
-      }
-    }
-    if (best !== null) {
-      matchedEvents += 1;
-      leads.push(e.bar - best);
-      matchedPoints.add(best);
-    }
-  }
   const reversalDetection = points.length > 0 && events.length > 0
-    ? Object.freeze({
-      groundTruthPoints: points.length,
-      events: events.length,
-      precision: matchedEvents / events.length,
-      recall: matchedPoints.size / points.length,
-      medianLeadBars: leads.length > 0
-        ? leads.slice().sort((a, b) => a - b)[Math.floor(leads.length / 2)] : null,
-      tolBars,
-    })
+    ? (() => {
+      const m = matchReversalEvents(events, points, tolBars);
+      const leads = m.pairs.map((p) => p.leadBars);
+      const median = (xs) => xs.length > 0
+        ? xs.slice().sort((a, b) => a - b)[Math.floor(xs.length / 2)] : null;
+      return Object.freeze({
+        groundTruthPoints: points.length,
+        events: events.length,
+        truePositives: m.truePositives,
+        falseAlarms: m.falseAlarms,
+        repeatedObservations: m.repeatedObservations,
+        // one-to-one: TP pairs only, in both rates.
+        precision: m.truePositives / events.length,
+        recall: m.truePositives / points.length,
+        medianDetectionLatencyBars: median(leads),
+        tolBars,
+        methodology: 'one-to-one greedy nearest-first matching within ' +
+          'tolerance; surplus events near an already-claimed point are ' +
+          'counted as repeated observations, not true positives; events ' +
+          'with no point in tolerance are false alarms; latency = event ' +
+          'bar minus ground-truth bar (negative = fired early).',
+      });
+    })()
     : null;
+
+  // Entry intelligence on the common prediction-opportunity grid
+  // (identical outcomes; exit-policy-free) — the primary entry metric.
+  const entryIntelligence = evaluateCommonOpportunityEntries(replay, market);
 
   // Comparative win-rate (typed refusal under 30 per engine is expected
   // on short paths — recorded, never forced).
@@ -340,9 +499,23 @@ function runCampaign(config) {
       seed: market.seed,
       nBars: market.nBars,
     }),
+    comparisonSemantics: Object.freeze({
+      championSide: 'SIMPLIFIED_S1_MIRROR',
+      note: 'The paired campaign compares the challenger against a RESEARCH ' +
+        'MIRROR of S1 (9-term composite, B1 confidence transform, fixed ' +
+        'stop/target geometry, fixed 0.2 lot) — NOT the complete deployed ' +
+        'V1 Champion (M1 strategy orchestration, six-pair routing, ' +
+        'reliability gates, calibration layers, X1..X6 exit engines). These ' +
+        'synthetic results are therefore mirror-relative deltas, never ' +
+        'statements about deployed-V1 performance.',
+      actualChampionEvidence: 'The ONLY actual deployed-V1 performance data ' +
+        'in the V2 track is the broker-confirmed evidence window (E-7: ' +
+        'sanitized real statement, single day, descriptive only).',
+    }),
     champion,
     challenger,
     reversalDetection,
+    entryIntelligence,
     winRateComparison,
     ledger: replay.ledger,
     replayNetTotals: Object.freeze({
@@ -608,6 +781,8 @@ module.exports = {
   normalQuantile,
   mannWhitneyAUC,
   settleRegistrations,
+  matchReversalEvents,
+  evaluateCommonOpportunityEntries,
   evaluateEntryDiscrimination,
   evaluateExitEfficiency,
   evaluateDrawdown,

@@ -10,6 +10,8 @@ const {
   normalQuantile,
   mannWhitneyAUC,
   settleRegistrations,
+  matchReversalEvents,
+  evaluateCommonOpportunityEntries,
   evaluateEntryDiscrimination,
   evaluateExitEfficiency,
   runCampaign,
@@ -162,4 +164,96 @@ test('exit efficiency captures retention and loss-cut asymmetries', () => {
 
 test('entry discrimination refuses empty inputs', () => {
   assert.throws(() => evaluateEntryDiscrimination([]), /HARNESS_DISCRIMINATION_EMPTY/);
+});
+
+test('reversal one-to-one matching: repeated observations are not true positives', () => {
+  // One ground-truth point at bar 100; three events in tolerance; one far.
+  const events = [{ bar: 98 }, { bar: 99 }, { bar: 103 }, { bar: 500 }];
+  const points = [{ bar: 100, directional: true }];
+  const m = matchReversalEvents(events, points, 12);
+  // Nearest event (99) claims the point; 98 and 103 are repeated
+  // observations; 500 has no point in tolerance -> false alarm.
+  assert.strictEqual(m.truePositives, 1);
+  assert.strictEqual(m.repeatedObservations, 2);
+  assert.strictEqual(m.falseAlarms, 1);
+  assert.strictEqual(m.pairs[0].eventBar, 99);
+  assert.strictEqual(m.pairs[0].pointBar, 100);
+  assert.strictEqual(m.pairs[0].leadBars, -1);
+  // Conservation: every event is exactly one of TP/repeated/falseAlarm.
+  assert.strictEqual(m.truePositives + m.repeatedObservations + m.falseAlarms,
+    events.length);
+});
+
+test('reversal one-to-one matching: two points two events pair one-to-one', () => {
+  const events = [{ bar: 200 }, { bar: 410 }];
+  const points = [{ bar: 190, directional: true }, { bar: 400, directional: true }];
+  const m = matchReversalEvents(events, points, 12);
+  assert.strictEqual(m.truePositives, 2);
+  assert.strictEqual(m.repeatedObservations, 0);
+  assert.strictEqual(m.falseAlarms, 0);
+  assert.deepStrictEqual(m.pairs.map((p) => p.leadBars), [10, 10]);
+});
+
+test('reversal one-to-one matching refusals', () => {
+  assert.throws(() => matchReversalEvents(null, [], 5), /HARNESS_REVERSAL_INPUT_REQUIRED/);
+  assert.throws(() => matchReversalEvents([], null, 5), /HARNESS_REVERSAL_INPUT_REQUIRED/);
+  assert.throws(() => matchReversalEvents([], [], -1), /HARNESS_REVERSAL_TOL_INVALID/);
+  assert.throws(() => matchReversalEvents([], [], 1.5), /HARNESS_REVERSAL_TOL_INVALID/);
+});
+
+test('common-opportunity entry evaluation: identical outcomes, abstention split', () => {
+  // Fabricated replay with windowBars=1 so forward outcomes are directly
+  // controlled by the bar sequence. Champion registers bars 0..4; the
+  // challenger takes 0,2,4 and abstains on 1,3.
+  const closes = [1.10, 1.11, 1.09, 1.10, 1.09, 1.10];
+  const bars = closes.map((c, i) => ({ i, close: c }));
+  const reg = (bar, direction, probability) => ({
+    bar, direction, probability, windowBars: 1,
+  });
+  const replay = {
+    champion: { registrations: [
+      reg(0, 'BUY', 0.7), reg(1, 'BUY', 0.65), reg(2, 'SELL', 0.6),
+      reg(3, 'BUY', 0.55), reg(4, 'BUY', 0.5),
+    ] },
+    // challenger takes bars 0 (BUY up -> win), 2 (SELL on up -> loss),
+    // 4 (BUY up -> win); abstains bars 1, 3 (both BUY on down -> losses).
+    challenger: { registrations: [
+      reg(0, 'BUY', 0.7), reg(2, 'SELL', 0.6), reg(4, 'BUY', 0.5),
+    ] },
+  };
+  const ei = evaluateCommonOpportunityEntries(replay, { bars });
+  assert.strictEqual(ei.method, 'COMMON_OPPORTUNITY_GRID');
+  assert.strictEqual(ei.commonOpportunities, 3);
+  // Identical outcome definition for both engines on the common grid.
+  assert.strictEqual(ei.challengerAbstention.takenCount, 3);
+  assert.strictEqual(ei.challengerAbstention.takenWinRate, 2 / 3);
+  assert.strictEqual(ei.challengerAbstention.abstainedCount, 2);
+  assert.strictEqual(ei.challengerAbstention.abstainedWinRate, 0);
+  // Small-sample difference comparison is a typed refusal, never forced.
+  assert.ok(ei.challengerAbstention.winRateDifference.refused !== undefined);
+  // AUC on the common set: positives {0.7, 0.5}, negative {0.6} -> 0.5.
+  assert.ok(Math.abs(ei.sharedScoreDiscrimination.auc - 0.5) < 1e-12);
+  assert.strictEqual(ei.sharedScoreDiscrimination.n, 3);
+  assert.throws(() => evaluateCommonOpportunityEntries(null, { bars }),
+    /HARNESS_COMMON_OPPORTUNITY_INPUT_REQUIRED/);
+});
+
+test('runCampaign reports one-to-one reversal stats and entry intelligence', () => {
+  const campaign = runCampaign({ seed: 20261128, nBars: 1500, scenario: 'TREND_REGIMES' });
+  const rd = campaign.reversalDetection;
+  assert.strictEqual(rd.truePositives + rd.repeatedObservations + rd.falseAlarms,
+    rd.events);
+  assert.ok(Math.abs(rd.precision - rd.truePositives / rd.events) < 1e-12);
+  assert.ok(Math.abs(rd.recall - rd.truePositives / rd.groundTruthPoints) < 1e-12);
+  assert.ok(Number.isFinite(rd.medianDetectionLatencyBars));
+  // Entry intelligence: common grid with identical outcomes.
+  const ei = campaign.entryIntelligence;
+  assert.strictEqual(ei.method, 'COMMON_OPPORTUNITY_GRID');
+  assert.ok(ei.commonOpportunities > 0);
+  assert.ok(Number.isFinite(ei.sharedScoreDiscrimination.auc));
+  assert.ok(ei.challengerAbstention.takenCount > 0);
+  assert.ok(ei.challengerAbstention.takenCount + ei.challengerAbstention.abstainedCount > 0);
+  // Comparison semantics: the champion side is labeled a simplified mirror.
+  assert.strictEqual(campaign.comparisonSemantics.championSide, 'SIMPLIFIED_S1_MIRROR');
+  assert.ok(campaign.comparisonSemantics.note.includes('NOT the complete deployed V1 Champion'));
 });
