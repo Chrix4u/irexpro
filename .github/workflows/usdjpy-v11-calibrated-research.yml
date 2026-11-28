@@ -18,6 +18,8 @@ env:
 jobs:
   qualify:
     name: Run leakage-safe USDJPY v11 qualification
+    # Runtime-only VPS policy: held until the hosted artifact replacement is verified.
+    if: ${{ false }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     environment:
