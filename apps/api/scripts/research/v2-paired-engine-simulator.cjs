@@ -103,6 +103,7 @@ function runPairedReplay(config) {
       tradeSeq: 0,
       features: createFeatureWindow({ pip }),
       snapshots: [],
+      registrations: [],
     },
     {
       name: 'CHALLENGER',
@@ -116,6 +117,7 @@ function runPairedReplay(config) {
       tradeSeq: 0,
       features: createFeatureWindow({ pip }),
       snapshots: [],
+      registrations: [],
     },
   ];
 
@@ -210,6 +212,7 @@ function runPairedReplay(config) {
       exitMid,
       entryPrice: p.entryPrice,
       exitPrice,
+      stopDistance: p.stopDistance,
       grossUsd,
       netUsd,
       commissionUsd: perSideCostUsd(p.lots) * 2,
@@ -321,6 +324,9 @@ function runPairedReplay(config) {
           equityUsd: engine.equityCurve[engine.equityCurve.length - 1],
           lastClose: bar.close,
         });
+        if (decision.registeredProbability) {
+          engine.registrations.push(decision.registeredProbability);
+        }
         if (engine.position === null && decision.entry) {
           engine.pendingEntry = decision.entry;
           engine.tradeSeq += 1;
@@ -362,11 +368,15 @@ function runPairedReplay(config) {
       identity: championIdentity,
       trades: Object.freeze(engines[0].trades.map((t) => Object.freeze({ ...t }))),
       equityCurve: Object.freeze(engines[0].equityCurve.slice()),
+      registrations: Object.freeze(engines[0].registrations.slice()),
+      reversalEvents: Object.freeze([]),
     }),
     challenger: Object.freeze({
       identity: challengerIdentity,
       trades: Object.freeze(engines[1].trades.map((t) => Object.freeze({ ...t }))),
       equityCurve: Object.freeze(engines[1].equityCurve.slice()),
+      registrations: Object.freeze(engines[1].registrations.slice()),
+      reversalEvents: Object.freeze(engines[1].policy.reversalEvents()),
     }),
     ledger,
   });

@@ -146,12 +146,14 @@ function createEnginePolicy(kind, config) {
   }
   const pip = finiteNumber(cfg.pip) ? cfg.pip : 0.0001;
 
-  // Challenger reversal-gate state.
+  // Challenger reversal-gate state (events recorded for the reversal
+  // detection metric family).
   let previousMomentumSign = null;
   let reversalActiveUntil = -1;
   let vetoDirection = null;
   let vetoUntil = -1;
   let probabilityCadence = 0;
+  const reversalEvents = [];
 
   function decide(ctx) {
     const { bar, barIndex, snapshot, position, equityUsd } = ctx;
@@ -226,6 +228,10 @@ function createEnginePolicy(kind, config) {
       reversalActiveUntil = barIndex + CHALLENGER_POLICY.reversalCooldownBars;
       vetoDirection = previousMomentumSign > 0 ? 'BUY' : 'SELL';
       vetoUntil = barIndex + CHALLENGER_POLICY.reversalVetoBars;
+      reversalEvents.push(Object.freeze({
+        bar: barIndex,
+        direction: vetoDirection,
+      }));
     }
     previousMomentumSign = momentumSign === 0 ? previousMomentumSign : momentumSign;
 
@@ -319,6 +325,7 @@ function createEnginePolicy(kind, config) {
     kind,
     identity,
     decide,
+    reversalEvents: () => reversalEvents.slice(),
   });
 }
 
