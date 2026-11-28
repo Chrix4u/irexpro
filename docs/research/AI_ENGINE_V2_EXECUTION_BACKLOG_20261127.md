@@ -6,8 +6,10 @@ track; disjoint scope) and PRs #834/#836/#837/#838 (M1 abstention research
 chain; V2 consumes their conclusions and adds no duplicate artifacts).
 
 Phase numbering: P0 audit (this branch) → P1 consolidation → P2 evaluation
-harness → P3 synthetic campaigns → P4 historical replay (blocked) → P5
-broker-connected DEMO (blocked on review) → P6 reporting and decision.
+harness → P3 synthetic campaigns → PI predictive-intelligence research
+(2026-11-28 directive; offline, added after E-10's negative results) →
+P4 historical replay (blocked) → P5 broker-connected DEMO (blocked on
+review) → P6 reporting and decision.
 Every item carries an owner-of-record role (research), an acceptance
 criterion, and a blocking dependency where applicable. No item modifies
 production runtime.
@@ -286,6 +288,73 @@ predicate mirrors — plus the complete offline evaluation stack:
   deficit to the correct channel. Acceptance: attribution accuracy report.
   Delivered → E-9 (attribution share ≥ 0.9091 both controlled arms) +
   ablation campaign E-10 (retention arms with uncertainty).
+
+## PI — Predictive intelligence research phase (directive 2026-11-28)
+
+Directive basis: the E-10 evaluation results demonstrate that threshold
+adjustments and exit-policy tuning alone do not establish predictive
+advantage — all eight tested market-condition cells remain negative after
+costs. This phase therefore researches INDEPENDENT predictive models on
+chronological, leakage-controlled datasets, compares classical /
+gradient-boosted / temporal candidate classes on COMMON prediction
+opportunities (including rejected opportunities) with IDENTICAL outcome
+definitions, and separates direction-prediction quality from exit-policy
+quality, position sizing and transaction-cost effects. Anti-goal
+(explicit): additional confidence gates or reduced trading frequency are
+NOT a substitute for improved intelligence — improvement claims require
+prediction-quality gains on the full common grid, never abstention
+artifacts.
+
+- [x] **PI-0** Preserve the current V2 generation as the immutable
+  research baseline → `v2-baseline-freeze.cjs` (+ test). Generation
+  `V2-G1` pinned at `559d4d06` with SHA-256 of the six core runnable
+  artifacts; in-place drift is a typed refusal (`BASELINE_TAMPERED`).
+  Acceptance: freeze verified on every run; fingerprint stable.
+- [ ] **PI-1** Secure historical-data ingestion contract (schema
+  validation, chronological ordering, duplicate refusal, OHLC sanity,
+  multi-timeframe aggregation with strict closed-bar no-future-peek
+  semantics). Acceptance: typed refusals on every malformed ingestion;
+  aggregation provably uses only bars closed before the decision time.
+  Privacy: fully synthetic fixtures in-repo; no broker records.
+- [ ] **PI-2** Synthetic multi-symbol multi-timeframe fixtures (M1 base →
+  M5/M15/H1/H4) for EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF with
+  null, planted-continuation-edge, trend-regime and reversion scenarios,
+  deterministic seeds. Acceptance: planted edge empirically recoverable;
+  null fixtures carry zero planted edge.
+- [ ] **PI-3** Common prediction-opportunity dataset builder: every
+  opportunity in the grid (including rejected/abstained) with IDENTICAL
+  fixed-horizon outcome definitions for all candidates; chronological
+  walk-forward splits with purge + embargo; held-out dataset preserved
+  against tuning. Acceptance: leakage controls provable (no future bars
+  in features, no held-out leakage into fitting).
+- [ ] **PI-4** Candidate model classes for trend-continuation, reversal,
+  market-regime and expected-return prediction: classical statistical
+  baselines (prior, L2 logistic, ridge), temporal models (online
+  recency-weighted logistic, AR(p)) and gradient-boosted stump ensembles
+  (small/large). Acceptance: deterministic fits; complexity descriptors
+  recorded for complexity-vs-value comparison.
+- [ ] **PI-5** Unified evaluation campaign: null false-positive control,
+  planted-edge detection sensitivity, complexity-vs-out-of-sample-value
+  table, prediction-quality layer (AUC/Brier/calibration on the FULL
+  common grid) strictly separated from the policy/economics layer
+  (one identical standardized fixed-horizon policy for every candidate).
+  Acceptance: null FP ≤ nominal; planted edge recovered within stated
+  uncertainty; no candidate improved via frequency reduction.
+- [ ] **PI-6** Research design + results documentation, privacy
+  compliance statement (synthetic fixtures only; original evidence
+  preserved securely offline; no squash-merge to conceal data, no shared
+  history rewrite, no new broker accounts) and red lines.
+- [ ] **PI-7** CI steps for every new suite; deterministic run artifacts
+  committed under `runs/` with SHA-256 recorded.
+- [ ] **PI-8** Held-out final report (single evaluation on the preserved
+  held-out dataset, nothing tuned there) and the pre-registered decision
+  gate: broker-connected evaluation is recommended ONLY with statistically
+  credible positive after-cost expectancy (95% CI excluding zero) AND
+  significant prediction-quality improvement over the prior baseline on
+  held-out data. Honest negative results reported as-is.
+- [ ] **PI-9** Operator-blocked items recorded (unchanged): the authorized
+  private historical export (P4) and any broker provisioning (P5) remain
+  outside this phase; V2 stays research-only with no LIVE authority.
 
 ## P4 — Historical replay (BLOCKED: data authorization)
 
